@@ -1,3 +1,5 @@
+![Cockpit — Heads-Up Command · Even G2](assets/cockpit-banner.png)
+
 # Cockpit — Heads-Up Command Centre for Even G2
 
 > **“Logged, logged — LLM worker.”**

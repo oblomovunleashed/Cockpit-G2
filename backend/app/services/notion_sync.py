@@ -27,6 +27,13 @@ class NotionSync:
     def enabled(self) -> bool:
         return self.settings.notion_enabled
 
+    @property
+    def holdings_enabled(self) -> bool:
+        return bool(
+            self.settings.notion_token.strip()
+            and self.settings.notion_holdings_database_id.strip()
+        )
+
     def _headers(self) -> dict[str, str]:
         return {
             "Authorization": f"Bearer {self.settings.notion_token}",
@@ -39,7 +46,7 @@ class NotionSync:
             return None
 
         properties: dict = {
-            "Entry": {"title": [{"text": {"content": entry.content[:200]}}]},
+            "Entry": {"title": [{"text": {"content": entry.content[:2000]}}]},
             "Mind": {"select": {"name": entry.mind.value.capitalize()}},
             "Kind": {"select": {"name": entry.kind.capitalize()}},
             "Logged At": {"date": {"start": entry.created_at}},
@@ -47,7 +54,7 @@ class NotionSync:
         if entry.ticker:
             properties["Ticker"] = {"rich_text": [{"text": {"content": entry.ticker}}]}
         if entry.source_citation:
-            properties["Source"] = {"rich_text": [{"text": {"content": entry.source_citation[:200]}}]}
+            properties["Source"] = {"rich_text": [{"text": {"content": entry.source_citation[:2000]}}]}
 
         payload = {
             "parent": {"database_id": self.settings.notion_log_database_id},
@@ -68,17 +75,17 @@ class NotionSync:
 
     async def sync_holding_update(self, holding: HoldingRecord) -> str | None:
         """Update or create a row in the Holdings Watchlist database."""
-        if not (self.settings.notion_token and self.settings.notion_holdings_database_id):
+        if not self.holdings_enabled:
             return None
 
         properties: dict = {
             "Ticker": {"title": [{"text": {"content": holding.ticker}}]},
-            "Company": {"rich_text": [{"text": {"content": holding.company[:200]}}]},
-            "Saved Question": {"rich_text": [{"text": {"content": holding.saved_question[:300]}}]},
+            "Company": {"rich_text": [{"text": {"content": holding.company[:2000]}}]},
+            "Saved Question": {"rich_text": [{"text": {"content": holding.saved_question[:2000]}}]},
             "Status": {"select": {"name": holding.verdict.value}},
-            "Latest Finding": {"rich_text": [{"text": {"content": holding.latest_finding[:300]}}]},
-            "Source": {"rich_text": [{"text": {"content": holding.source_citation[:200]}}]},
-            "Next Check": {"rich_text": [{"text": {"content": holding.next_check[:300]}}]},
+            "Latest Finding": {"rich_text": [{"text": {"content": holding.latest_finding[:2000]}}]},
+            "Source": {"rich_text": [{"text": {"content": holding.source_citation[:2000]}}]},
+            "Next Check": {"rich_text": [{"text": {"content": holding.next_check[:2000]}}]},
         }
         try:
             async with httpx.AsyncClient(timeout=12.0) as client:

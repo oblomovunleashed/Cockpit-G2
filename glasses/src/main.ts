@@ -105,6 +105,7 @@ async function showCard(card: HudCard): Promise<void> {
 }
 
 async function submitTextUtterance(transcript: string): Promise<void> {
+  if (state.mode === 'PROCESSING' || recorder.isRecording) return;
   const clean = transcript.trim();
   if (!clean) return;
 
@@ -143,8 +144,13 @@ async function submitTextUtterance(transcript: string): Promise<void> {
 }
 
 async function handleTapAction(): Promise<void> {
+  if (state.mode === 'PROCESSING' || recorder.isRecording) return;
+
   if (state.pendingWrite) {
-    const pendingId = state.pendingWrite.id;
+    const pending = state.pendingWrite;
+    // Clear pendingWrite and enter PROCESSING before awaiting network so a rapid
+    // second tap cannot fire a duplicate confirmation request.
+    state.pendingWrite = null;
     state.mode = 'PROCESSING';
     await showCard({
       header: 'COCKPIT · SAVING',
@@ -152,28 +158,49 @@ async function handleTapAction(): Promise<void> {
       footer: 'Please wait...',
     });
 
-    const confirmed = await api.confirmWrite(pendingId);
-    state.pendingWrite = null;
-    state.mode = 'RESULT';
-    await refreshDeck(false);
-    await showCard(confirmed.hud);
+    try {
+      const confirmed = await api.confirmWrite(pending.id);
+      state.mode = 'RESULT';
+      await refreshDeck(false);
+      await showCard(confirmed.hud);
+    } catch (err) {
+      state.mode = 'BRIEFING';
+      await showCard({
+        header: 'COCKPIT · SAVE ERROR',
+        body: err instanceof Error ? err.message : 'Failed to save entry.',
+        footer: 'Swipe to return to deck',
+      });
+    }
     return;
   }
 
   // Zero-dictation 1-tap path on a holding card: stage AI-drafted next-quarter check
   const current = activeHolding(state);
   if (current) {
-    const staged = await api.stageSuggestedCheck(current.ticker);
-    state.pendingWrite = staged.pending_write;
-    state.mode = 'CONFIRM_WRITE';
-    await showCard(staged.hud);
+    state.mode = 'PROCESSING';
+    try {
+      const staged = await api.stageSuggestedCheck(current.ticker);
+      state.pendingWrite = staged.pending_write;
+      state.mode = 'CONFIRM_WRITE';
+      await showCard(staged.hud);
+    } catch (err) {
+      state.mode = 'BRIEFING';
+      await showCard({
+        header: 'COCKPIT · ERROR',
+        body: err instanceof Error ? err.message : 'Could not stage check.',
+        footer: 'Try again',
+      });
+    }
   }
 }
 
 async function handleSwipe(delta: number): Promise<void> {
+  if (state.mode === 'PROCESSING' || recorder.isRecording) return;
+
   if (state.pendingWrite) {
-    await api.cancelWrite(state.pendingWrite.id);
+    const pendingId = state.pendingWrite.id;
     state.pendingWrite = null;
+    await api.cancelWrite(pendingId);
     state.mode = 'BRIEFING';
     await showCard(holdingToCard(state));
     return;
@@ -188,10 +215,13 @@ async function handleSwipe(delta: number): Promise<void> {
 }
 
 async function handleDoubleTap(): Promise<void> {
+  if (state.mode === 'PROCESSING') return;
+
   if (state.mode !== 'BRIEFING' || state.pendingWrite) {
     if (state.pendingWrite) {
-      await api.cancelWrite(state.pendingWrite.id);
+      const pendingId = state.pendingWrite.id;
       state.pendingWrite = null;
+      await api.cancelWrite(pendingId);
     }
     state.mode = 'BRIEFING';
     await showCard(holdingToCard(state));
@@ -205,7 +235,7 @@ async function handleDoubleTap(): Promise<void> {
 }
 
 async function startVoiceCapture(): Promise<void> {
-  if (recorder.isRecording) return;
+  if (state.mode === 'PROCESSING' || recorder.isRecording) return;
   state.mode = 'LISTENING';
   await showCard({
     header: 'COCKPIT · ● LISTENING',

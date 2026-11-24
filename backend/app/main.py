@@ -102,10 +102,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             suggested_next_check=suggested_check,
         )
         assert updated is not None
-        if notion.enabled:
+        if notion.holdings_enabled:
             page_id = await notion.sync_holding_update(updated)
             if page_id and page_id != updated.notion_page_id:
-                updated = db.upsert_holding(updated.model_copy(update={"notion_page_id": page_id}))
+                updated = (
+                    db.update_holding_notion_page_id(updated.ticker, page_id)
+                    or updated.model_copy(update={"notion_page_id": page_id})
+                )
         return updated
 
     async def _job_handler(ticker: str) -> None:
@@ -165,7 +168,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 id=uuid.uuid4().hex[:12],
                 mind=decision.mind,
                 kind=kind,  # type: ignore[arg-type]
-                content=_clip(transcript, 200),
+                content=transcript.strip(),
                 ticker=None,
                 source_citation=None,
                 updates_next_check=False,
@@ -189,7 +192,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 id=uuid.uuid4().hex[:12],
                 mind=Mind.WORK,
                 kind="check",
-                content=_clip(transcript, 200),
+                content=transcript.strip(),
                 ticker=ticker,
                 source_citation=holding.source_citation if holding else None,
                 updates_next_check=True,
@@ -225,7 +228,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 id=uuid.uuid4().hex[:12],
                 mind=Mind.WORK,
                 kind="check",
-                content=_clip(suggested_check, 180),
+                content=suggested_check.strip(),
                 ticker=ticker,
                 source_citation=chunk.page_ref,
                 updates_next_check=True,
@@ -300,12 +303,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         holding = db.get_holding(ticker)
         if not holding:
             raise HTTPException(status_code=404, detail=f"Unknown holding: {ticker}")
-        draft = holding.suggested_next_check or f"Review {holding.ticker} next earnings call"
+        draft = (holding.suggested_next_check or f"Review {holding.ticker} next earnings call").strip()
         pending = PendingWrite(
             id=uuid.uuid4().hex[:12],
             mind=Mind.WORK,
             kind="check",
-            content=_clip(draft, 180),
+            content=draft,
             ticker=holding.ticker,
             source_citation=holding.source_citation,
             updates_next_check=True,
@@ -344,38 +347,37 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.post("/api/confirm", response_model=ConfirmWriteResponse)
     async def confirm_write(body: ConfirmWriteRequest) -> ConfirmWriteResponse:
-        pending = db.get_pending_write(body.pending_id)
-        if not pending:
+        # Atomically claim the pending write and persist locally BEFORE awaiting Notion
+        # so overlapping confirmations cannot create duplicate journal or Notion entries.
+        claimed = db.claim_and_commit_pending_write(
+            body.pending_id,
+            override_text=body.override_text,
+        )
+        if claimed is None:
             raise HTTPException(status_code=404, detail=f"Pending write not found: {body.pending_id}")
 
-        content = (body.override_text or pending.content).strip()
-        entry = db.add_journal_entry(
-            mind=pending.mind,
-            kind=pending.kind,
-            content=content,
-            ticker=pending.ticker,
-            source_citation=pending.source_citation,
-        )
+        pending, entry, updated_holding = claimed
 
         synced = False
         notion_page_id = await notion.push_journal_entry(entry)
         if notion_page_id:
             synced = True
+            db.update_journal_notion_page_id(entry.id, notion_page_id)
             entry = entry.model_copy(update={"notion_page_id": notion_page_id})
 
-        updated_holding: HoldingRecord | None = None
-        if pending.updates_next_check and pending.ticker:
-            updated_holding = db.update_holding_next_check(pending.ticker, content)
-            if updated_holding and notion.enabled:
-                await notion.sync_holding_update(updated_holding)
-
-        db.delete_pending_write(pending.id)
+        if updated_holding and notion.holdings_enabled:
+            holding_page_id = await notion.sync_holding_update(updated_holding)
+            if holding_page_id and holding_page_id != updated_holding.notion_page_id:
+                updated_holding = (
+                    db.update_holding_notion_page_id(updated_holding.ticker, holding_page_id)
+                    or updated_holding.model_copy(update={"notion_page_id": holding_page_id})
+                )
 
         dest = "Notion + Journal" if synced else "Journal"
         label = f"{pending.mind.value.upper()} · SAVED"
         hud = HudCard(
             header=_clip(label, 60),
-            body=_clip(f"✓ {content}\nSaved to {dest}.", 240),
+            body=_clip(f"✓ {entry.content}\nSaved to {dest}.", 240),
             footer="Hold: speak · Swipe: holdings",
         )
         return ConfirmWriteResponse(

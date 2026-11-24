@@ -201,6 +201,17 @@ class CockpitDB:
                 return None
         return self.get_holding(ticker)
 
+    def update_holding_notion_page_id(self, ticker: str, notion_page_id: str) -> HoldingRecord | None:
+        now = utc_now_iso()
+        with self._connect() as conn:
+            cur = conn.execute(
+                "UPDATE holdings SET notion_page_id = ?, updated_at = ? WHERE UPPER(ticker) = UPPER(?)",
+                (notion_page_id, now, ticker),
+            )
+            if cur.rowcount == 0:
+                return None
+        return self.get_holding(ticker)
+
     # ------------------------------------------------------------------
     # Document chunks
     # ------------------------------------------------------------------
@@ -293,6 +304,105 @@ class CockpitDB:
         with self._connect() as conn:
             cur = conn.execute("DELETE FROM pending_writes WHERE id = ?", (pending_id,))
         return cur.rowcount > 0
+
+    def claim_and_commit_pending_write(
+        self,
+        pending_id: str,
+        *,
+        override_text: str | None = None,
+    ) -> tuple[PendingWrite, JournalEntry, HoldingRecord | None] | None:
+        """
+        Atomically consumes a pending write and commits the local journal entry
+        (and optional holding next_check update) in a single IMMEDIATE SQLite transaction
+        before any external Notion network call is awaited.
+        """
+        conn = sqlite3.connect(self.db_path, isolation_level=None)
+        conn.row_factory = sqlite3.Row
+        try:
+            conn.execute("PRAGMA foreign_keys=ON;")
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute(
+                "SELECT * FROM pending_writes WHERE id = ?",
+                (pending_id,),
+            ).fetchone()
+            if not row:
+                conn.execute("ROLLBACK")
+                return None
+
+            pending = PendingWrite(
+                id=row["id"],
+                mind=Mind(row["mind"]),
+                kind=row["kind"],
+                content=row["content"],
+                ticker=row["ticker"],
+                source_citation=row["source_citation"],
+                updates_next_check=bool(row["updates_next_check"]),
+            )
+
+            del_cur = conn.execute("DELETE FROM pending_writes WHERE id = ?", (pending_id,))
+            if del_cur.rowcount != 1:
+                conn.execute("ROLLBACK")
+                return None
+
+            now = utc_now_iso()
+            override = override_text.strip() if override_text is not None else ""
+            content = (override or pending.content).strip()
+            ins_cur = conn.execute(
+                """
+                INSERT INTO journal_entries (
+                    mind, kind, content, ticker, source_citation, notion_page_id, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    pending.mind.value,
+                    pending.kind,
+                    content,
+                    pending.ticker,
+                    pending.source_citation,
+                    None,
+                    now,
+                ),
+            )
+            entry_id = int(ins_cur.lastrowid)
+            entry = JournalEntry(
+                id=entry_id,
+                mind=pending.mind,
+                kind=pending.kind,
+                content=content,
+                ticker=pending.ticker,
+                source_citation=pending.source_citation,
+                notion_page_id=None,
+                created_at=now,
+            )
+
+            updated_holding: HoldingRecord | None = None
+            if pending.updates_next_check and pending.ticker:
+                conn.execute(
+                    "UPDATE holdings SET next_check = ?, updated_at = ? WHERE UPPER(ticker) = UPPER(?)",
+                    (content, now, pending.ticker),
+                )
+                h_row = conn.execute(
+                    "SELECT * FROM holdings WHERE UPPER(ticker) = UPPER(?)",
+                    (pending.ticker,),
+                ).fetchone()
+                if h_row:
+                    updated_holding = self._row_to_holding(h_row)
+
+            conn.execute("COMMIT")
+            return pending, entry, updated_holding
+        except Exception:
+            if conn.in_transaction:
+                conn.execute("ROLLBACK")
+            raise
+        finally:
+            conn.close()
+
+    def update_journal_notion_page_id(self, entry_id: int, notion_page_id: str) -> None:
+        with self._connect() as conn:
+            conn.execute(
+                "UPDATE journal_entries SET notion_page_id = ? WHERE id = ?",
+                (notion_page_id, entry_id),
+            )
 
     def add_journal_entry(
         self,

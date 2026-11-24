@@ -177,7 +177,7 @@ class JevRouter:
     # ------------------------------------------------------------------
 
     @staticmethod
-    def _detect_ticker(lower: str, available_tickers: list[str], active_ticker: str | None) -> str | None:
+    def _detect_explicit_ticker(lower: str, available_tickers: list[str]) -> str | None:
         aliases = {
             "NVDA": ("nvda", "nvidia"),
             "MSFT": ("msft", "microsoft", "azure"),
@@ -187,7 +187,7 @@ class JevRouter:
             names = aliases.get(ticker.upper(), (ticker.lower(),))
             if any(re.search(rf"\b{re.escape(name)}\b", lower) for name in names):
                 return ticker.upper()
-        return active_ticker
+        return None
 
     def _mock_route_utterance(
         self,
@@ -222,14 +222,15 @@ class JevRouter:
                 reasoning="Fast-path interests note detected (no LLM worker).",
             )
 
-        ticker = self._detect_ticker(lower, available_tickers, active_ticker)
+        explicit_ticker = self._detect_explicit_ticker(lower, available_tickers)
+        resolved_ticker = explicit_ticker or active_ticker or (available_tickers[0] if available_tickers else None)
 
         # Next-quarter check dictation ("At the next call, check whether those price increases are on schedule")
         if any(kw in lower for kw in ("next call", "next quarter", "check whether", "track whether", "save check", "watch item")):
             return JevDecision(
                 mind=Mind.WORK,
                 action=ActionType.DRAFT_NEXT_CHECK,
-                holding=ticker or (available_tickers[0] if available_tickers else None),
+                holding=resolved_ticker,
                 needs_llm_worker=False,
                 confidence=0.94,
                 mode="mock",
@@ -241,7 +242,7 @@ class JevRouter:
             return JevDecision(
                 mind=Mind.WORK,
                 action=ActionType.FOLLOW_UP_SOURCE,
-                holding=ticker or (available_tickers[0] if available_tickers else None),
+                holding=resolved_ticker,
                 needs_llm_worker=True,
                 confidence=0.93,
                 mode="mock",
@@ -249,11 +250,12 @@ class JevRouter:
             )
 
         # Earnings / holdings review ("Can we review NVIDIA earnings?", "What changed?")
-        if any(kw in lower for kw in ("earning", "review", "what changed", "holding", "guidance", "margin", "revenue")) or ticker:
+        # Only explicit ticker mentions or work keywords trigger Work — display context alone does not.
+        if any(kw in lower for kw in ("earning", "review", "what changed", "holding", "guidance", "margin", "revenue")) or explicit_ticker is not None:
             return JevDecision(
                 mind=Mind.WORK,
                 action=ActionType.BRIEF_HOLDING,
-                holding=ticker or (available_tickers[0] if available_tickers else None),
+                holding=resolved_ticker,
                 needs_llm_worker=True,
                 confidence=0.95,
                 mode="mock",

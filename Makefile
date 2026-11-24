@@ -21,6 +21,7 @@ sim:
 
 test:
 	PYTHONPATH=backend backend/.venv/bin/pytest backend/tests -v
+	cd glasses && npm test
 
 typecheck:
 	cd glasses && npm run typecheck

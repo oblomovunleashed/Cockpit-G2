@@ -1,6 +1,5 @@
 import {
   AudioInputSource,
-  OsEventTypeList,
   waitForEvenAppBridge,
   type EvenAppBridge,
   type EvenHubEvent,
@@ -13,6 +12,7 @@ import {
   MENU_ITEM_PULL_NOTION,
   MENU_ITEM_REFRESH,
 } from './hud';
+import { dispatchEvenHubEvent, executeTapAction } from './input';
 import { activeHolding, createInitialState, holdingToCard, type CockpitState } from './state';
 import type { HudCard, JevDecision } from './types';
 
@@ -96,6 +96,7 @@ async function refreshDeck(renderCurrent = true): Promise<void> {
   if (renderCurrent) {
     state.mode = 'BRIEFING';
     state.pendingWrite = null;
+    state.suggestedCheck = null;
     await hud.render(holdingToCard(state));
   }
 }
@@ -121,6 +122,7 @@ async function submitTextUtterance(transcript: string): Promise<void> {
     const res = await api.sendText(clean, current?.ticker ?? null);
     state.lastDecision = res.decision;
     state.pendingWrite = res.pending_write;
+    state.suggestedCheck = res.suggested_check;
 
     if (res.holding) {
       const idx = state.holdings.findIndex((h) => h.ticker === res.holding?.ticker);
@@ -130,7 +132,11 @@ async function submitTextUtterance(transcript: string): Promise<void> {
       }
     }
 
-    state.mode = res.pending_write ? 'CONFIRM_WRITE' : 'BRIEFING';
+    state.mode = res.pending_write
+      ? 'CONFIRM_WRITE'
+      : res.suggested_check
+        ? 'RESULT'
+        : 'BRIEFING';
     updateCompanionPanel(res.decision);
     await showCard(res.hud);
   } catch (err) {
@@ -144,54 +150,15 @@ async function submitTextUtterance(transcript: string): Promise<void> {
 }
 
 async function handleTapAction(): Promise<void> {
-  if (state.mode === 'PROCESSING' || recorder.isRecording) return;
-
-  if (state.pendingWrite) {
-    const pending = state.pendingWrite;
-    // Clear pendingWrite and enter PROCESSING before awaiting network so a rapid
-    // second tap cannot fire a duplicate confirmation request.
-    state.pendingWrite = null;
-    state.mode = 'PROCESSING';
-    await showCard({
-      header: 'COCKPIT · SAVING',
-      body: 'Writing confirmed entry to journal...',
-      footer: 'Please wait...',
-    });
-
-    try {
-      const confirmed = await api.confirmWrite(pending.id);
-      state.mode = 'RESULT';
-      await refreshDeck(false);
-      await showCard(confirmed.hud);
-    } catch (err) {
-      state.mode = 'BRIEFING';
-      await showCard({
-        header: 'COCKPIT · SAVE ERROR',
-        body: err instanceof Error ? err.message : 'Failed to save entry.',
-        footer: 'Swipe to return to deck',
-      });
-    }
-    return;
-  }
-
-  // Zero-dictation 1-tap path on a holding card: stage AI-drafted next-quarter check
-  const current = activeHolding(state);
-  if (current) {
-    state.mode = 'PROCESSING';
-    try {
-      const staged = await api.stageSuggestedCheck(current.ticker);
-      state.pendingWrite = staged.pending_write;
-      state.mode = 'CONFIRM_WRITE';
-      await showCard(staged.hud);
-    } catch (err) {
-      state.mode = 'BRIEFING';
-      await showCard({
-        header: 'COCKPIT · ERROR',
-        body: err instanceof Error ? err.message : 'Could not stage check.',
-        footer: 'Try again',
-      });
-    }
-  }
+  await executeTapAction(state, {
+    isRecording: () => recorder.isRecording,
+    getActiveHolding: activeHolding,
+    confirmWrite: (pendingId) => api.confirmWrite(pendingId),
+    stageCheck: (draft) => api.stageCheck(draft),
+    stageSuggestedCheck: (ticker) => api.stageSuggestedCheck(ticker),
+    refreshDeckAfterSave: () => refreshDeck(false),
+    showCard,
+  });
 }
 
 async function handleSwipe(delta: number): Promise<void> {
@@ -200,12 +167,14 @@ async function handleSwipe(delta: number): Promise<void> {
   if (state.pendingWrite) {
     const pendingId = state.pendingWrite.id;
     state.pendingWrite = null;
+    state.suggestedCheck = null;
     await api.cancelWrite(pendingId);
     state.mode = 'BRIEFING';
     await showCard(holdingToCard(state));
     return;
   }
 
+  state.suggestedCheck = null;
   if (state.holdings.length > 0) {
     state.holdingIndex =
       (state.holdingIndex + delta + state.holdings.length) % state.holdings.length;
@@ -217,12 +186,13 @@ async function handleSwipe(delta: number): Promise<void> {
 async function handleDoubleTap(): Promise<void> {
   if (state.mode === 'PROCESSING') return;
 
-  if (state.mode !== 'BRIEFING' || state.pendingWrite) {
+  if (state.mode !== 'BRIEFING' || state.pendingWrite || state.suggestedCheck) {
     if (state.pendingWrite) {
       const pendingId = state.pendingWrite.id;
       state.pendingWrite = null;
       await api.cancelWrite(pendingId);
     }
+    state.suggestedCheck = null;
     state.mode = 'BRIEFING';
     await showCard(holdingToCard(state));
     return;
@@ -266,6 +236,7 @@ async function stopVoiceCaptureAndRoute(): Promise<void> {
     const res = await api.sendVoice(wavBlob, current?.ticker ?? null);
     state.lastDecision = res.decision;
     state.pendingWrite = res.pending_write;
+    state.suggestedCheck = res.suggested_check;
     if (res.holding) {
       const idx = state.holdings.findIndex((h) => h.ticker === res.holding?.ticker);
       if (idx >= 0) {
@@ -273,7 +244,11 @@ async function stopVoiceCaptureAndRoute(): Promise<void> {
         state.holdingIndex = idx;
       }
     }
-    state.mode = res.pending_write ? 'CONFIRM_WRITE' : 'BRIEFING';
+    state.mode = res.pending_write
+      ? 'CONFIRM_WRITE'
+      : res.suggested_check
+        ? 'RESULT'
+        : 'BRIEFING';
     updateCompanionPanel(res.decision);
     await showCard(res.hud);
   } catch (err) {
@@ -287,48 +262,24 @@ async function stopVoiceCaptureAndRoute(): Promise<void> {
 }
 
 function handleEvenHubEvent(event: EvenHubEvent): void {
-  if (event.audioEvent?.audioPcm) {
-    recorder.pushChunk(event.audioEvent.audioPcm);
-    return;
-  }
-
-  if (event.menuItemClickEvent?.itemID !== undefined) {
-    const itemId = event.menuItemClickEvent.itemID;
-    if (itemId === MENU_ITEM_PULL_NOTION) {
-      void api.pullNotion().then(() => refreshDeck(true));
-    } else if (itemId === MENU_ITEM_NEXT_HOLDING) {
-      void handleSwipe(1);
-    } else if (itemId === MENU_ITEM_REFRESH) {
-      void refreshDeck(true);
-    }
-    return;
-  }
-
-  const eventType = event.sysEvent?.eventType ?? event.textEvent?.eventType;
-  if (eventType === undefined) return;
-
-  switch (eventType) {
-    case OsEventTypeList.LONG_PRESS_EVENT:
-      void startVoiceCapture();
-      break;
-    case OsEventTypeList.LONG_PRESS_RELEASE_EVENT:
-      void stopVoiceCaptureAndRoute();
-      break;
-    case OsEventTypeList.CLICK_EVENT:
-      void handleTapAction();
-      break;
-    case OsEventTypeList.SCROLL_BOTTOM_EVENT:
-      void handleSwipe(1);
-      break;
-    case OsEventTypeList.SCROLL_TOP_EVENT:
-      void handleSwipe(-1);
-      break;
-    case OsEventTypeList.DOUBLE_CLICK_EVENT:
-      void handleDoubleTap();
-      break;
-    default:
-      break;
-  }
+  dispatchEvenHubEvent(event, {
+    onAudioPcm: (pcm) => recorder.pushChunk(pcm),
+    onMenuItemClick: (itemId) => {
+      if (itemId === MENU_ITEM_PULL_NOTION) {
+        void api.pullNotion().then(() => refreshDeck(true));
+      } else if (itemId === MENU_ITEM_NEXT_HOLDING) {
+        void handleSwipe(1);
+      } else if (itemId === MENU_ITEM_REFRESH) {
+        void refreshDeck(true);
+      }
+    },
+    onLongPress: () => void startVoiceCapture(),
+    onLongPressRelease: () => void stopVoiceCaptureAndRoute(),
+    onTap: () => void handleTapAction(),
+    onSwipeNext: () => void handleSwipe(1),
+    onSwipePrev: () => void handleSwipe(-1),
+    onDoubleTap: () => void handleDoubleTap(),
+  });
 }
 
 function wireCompanionControls(): void {
@@ -357,6 +308,7 @@ function wireCompanionControls(): void {
       state.holdingIndex = idx;
     }
     state.pendingWrite = null;
+    state.suggestedCheck = null;
     state.mode = 'BRIEFING';
     await showCard(updated.hud);
   });
@@ -385,7 +337,7 @@ async function boot(): Promise<void> {
   await hud.init({
     header: 'COCKPIT · LOADING',
     body: 'Connecting to local Cockpit service...',
-    footer: 'Hold: speak · Tap: confirm · Swipe: next',
+    footer: 'Hold: speak · Tap: review check · Swipe: next',
   });
 
   if (bridge) {

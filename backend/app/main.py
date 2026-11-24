@@ -14,12 +14,14 @@ from app.models import (
     ConfirmWriteRequest,
     ConfirmWriteResponse,
     DeckStateResponse,
+    DraftCheck,
     HoldingRecord,
     HudCard,
     JevDecision,
     JournalEntry,
     Mind,
     PendingWrite,
+    StageCheckRequest,
     UpdateQuestionRequest,
     UtteranceRequest,
     UtteranceResponse,
@@ -33,6 +35,9 @@ from app.services.openrouter_stt import OpenRouterSTT
 from app.services.retrieval import DocumentRetriever
 
 
+NO_MATCH_FINDING = "No matching passage in indexed filings for this question."
+
+
 def _clip(text: str, limit: int) -> str:
     clean = " ".join(text.strip().split())
     if len(clean) <= limit:
@@ -41,9 +46,19 @@ def _clip(text: str, limit: int) -> str:
 
 
 def format_holding_hud(holding: HoldingRecord, *, index: int = 1, total: int = 3) -> HudCard:
-    header = _clip(f"WORK · {holding.ticker} {index}/{total} · {holding.verdict.value}", 60)
-    body = _clip(f"{holding.latest_finding}\n[{holding.source_citation}]", 240)
-    footer = "Hold: speak · Tap: save check · Swipe: next"
+    verdict_part = f" · {holding.verdict.value}" if holding.verdict is not None else ""
+    header = _clip(f"WORK · {holding.ticker} {index}/{total}{verdict_part}", 60)
+
+    if holding.source_citation:
+        raw_body = f"{holding.latest_finding}\n[{holding.source_citation}]"
+    else:
+        raw_body = holding.latest_finding or NO_MATCH_FINDING
+    body = _clip(raw_body, 240)
+
+    if holding.suggested_next_check:
+        footer = "Hold: speak · Tap: review check · Swipe: next"
+    else:
+        footer = "Hold: ask or dictate check · Swipe: next"
     return HudCard(header=header, body=body, footer=footer)
 
 
@@ -80,30 +95,85 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     worker = LLMWorker(cfg)
     notion = NotionSync(cfg)
 
-    async def recompute_holding(ticker: str) -> HoldingRecord:
+    async def refresh_holding_from_notion(ticker: str) -> HoldingRecord | None:
+        holding = db.get_holding(ticker)
+        if not holding or not notion.holdings_enabled:
+            return holding
+        snapshots = await notion.pull_holdings()
+        snap = snapshots.get(holding.ticker.upper())
+        if not snap:
+            return holding
+
+        updates: dict[str, object] = {}
+        if snap.notion_page_id and snap.notion_page_id != holding.notion_page_id:
+            updates["notion_page_id"] = snap.notion_page_id
+        if snap.saved_question and snap.saved_question != holding.saved_question:
+            updates["saved_question"] = snap.saved_question
+        if snap.next_check and snap.next_check != holding.next_check:
+            updates["next_check"] = snap.next_check
+        if updates:
+            return db.upsert_holding(holding.model_copy(update=updates))
+        return holding
+
+    async def recompute_holding(
+        ticker: str,
+        *,
+        pull_from_notion: bool = True,
+        push_saved_question: bool = False,
+    ) -> HoldingRecord:
         holding = db.get_holding(ticker)
         if not holding:
             raise HTTPException(status_code=404, detail=f"Unknown holding: {ticker}")
+
+        if notion.holdings_enabled:
+            if pull_from_notion:
+                refreshed = await refresh_holding_from_notion(holding.ticker)
+                if refreshed is not None:
+                    holding = refreshed
+            elif not holding.notion_page_id:
+                snapshots = await notion.pull_holdings()
+                snap = snapshots.get(holding.ticker.upper())
+                if snap and snap.notion_page_id:
+                    holding = (
+                        db.update_holding_notion_page_id(holding.ticker, snap.notion_page_id)
+                        or holding.model_copy(update={"notion_page_id": snap.notion_page_id})
+                    )
+
         candidates = retriever.retrieve(holding.ticker, holding.saved_question, limit=4)
-        if not candidates:
-            return holding
-        chunk, verdict, _ = await jev.select_best_chunk(holding.saved_question, candidates)
-        finding, suggested_check = await worker.synthesize_card(
-            ticker=holding.ticker,
-            question=holding.saved_question,
-            chunk=chunk,
-            verdict=verdict,
-        )
-        updated = db.update_holding_finding(
-            holding.ticker,
-            verdict=verdict,
-            latest_finding=finding,
-            source_citation=chunk.page_ref,
-            suggested_next_check=suggested_check,
-        )
+        match = await jev.select_best_chunk(holding.saved_question, candidates) if candidates else None
+
+        if match is None:
+            updated = db.update_holding_finding(
+                holding.ticker,
+                verdict=None,
+                latest_finding=NO_MATCH_FINDING,
+                source_citation="",
+                suggested_next_check="",
+            )
+        else:
+            chunk, verdict, _ = match
+            finding, suggested_check = await worker.synthesize_card(
+                ticker=holding.ticker,
+                question=holding.saved_question,
+                chunk=chunk,
+                verdict=verdict,
+            )
+            updated = db.update_holding_finding(
+                holding.ticker,
+                verdict=verdict,
+                latest_finding=finding,
+                source_citation=chunk.page_ref,
+                suggested_next_check=suggested_check,
+            )
+
         assert updated is not None
         if notion.holdings_enabled:
-            page_id = await notion.sync_holding_update(updated)
+            page_id = await notion.sync_holding_update(
+                updated,
+                include_finding=True,
+                include_saved_question=push_saved_question,
+                include_next_check=False,
+            )
             if page_id and page_id != updated.notion_page_id:
                 updated = (
                     db.update_holding_notion_page_id(updated.ticker, page_id)
@@ -112,7 +182,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return updated
 
     async def _job_handler(ticker: str) -> None:
-        await recompute_holding(ticker)
+        await recompute_holding(ticker, pull_from_notion=True, push_saved_question=False)
 
     jobs = BackgroundJobRunner(_job_handler)
     runtime = AppRuntime(
@@ -180,6 +250,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 hud=format_confirm_hud(pending),
                 holding=None,
                 pending_write=pending,
+                suggested_check=None,
             )
 
         # --------------------------------------------------------------
@@ -204,6 +275,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 hud=format_confirm_hud(pending),
                 holding=holding,
                 pending_write=pending,
+                suggested_check=None,
             )
 
         # --------------------------------------------------------------
@@ -216,39 +288,52 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
         if decision.action == ActionType.FOLLOW_UP_SOURCE:
             candidates = retriever.retrieve(ticker, transcript, limit=4)
-            chunk, verdict, _ = await jev.select_best_chunk(transcript, candidates)
+            match = await jev.select_best_chunk(transcript, candidates) if candidates else None
+            if match is None:
+                hud = HudCard(
+                    header=_clip(f"WORK · {ticker} · NO MATCH", 60),
+                    body=_clip(NO_MATCH_FINDING, 240),
+                    footer="Hold: ask again or dictate check",
+                )
+                return UtteranceResponse(
+                    transcript=transcript,
+                    decision=decision,
+                    hud=hud,
+                    holding=holding,
+                    pending_write=None,
+                    suggested_check=None,
+                )
+
+            chunk, verdict, _ = match
             finding, suggested_check = await worker.synthesize_card(
                 ticker=ticker,
                 question=transcript,
                 chunk=chunk,
                 verdict=verdict,
             )
-            # Stage the AI-drafted next-quarter check for instant 1-tap confirmation
-            pending = PendingWrite(
-                id=uuid.uuid4().hex[:12],
-                mind=Mind.WORK,
-                kind="check",
+            # Never silently stage a pending write whose wording is not shown on screen.
+            # Return suggested_check so tapping once opens the CONFIRM CHECK preview card.
+            draft = DraftCheck(
                 content=suggested_check.strip(),
                 ticker=ticker,
                 source_citation=chunk.page_ref,
-                updates_next_check=True,
             )
-            db.save_pending_write(pending)
             hud = HudCard(
                 header=_clip(f"WORK · {ticker} · SOURCE", 60),
                 body=_clip(f"{finding}\n[{chunk.page_ref}]", 240),
-                footer="Tap: save next check · Hold: dictate",
+                footer="Tap: review next check · Hold: dictate",
             )
             return UtteranceResponse(
                 transcript=transcript,
                 decision=decision,
                 hud=hud,
                 holding=holding,
-                pending_write=pending,
+                pending_write=None,
+                suggested_check=draft,
             )
 
-        # Default Work path: recompute or surface sourced card for saved question
-        updated = await recompute_holding(ticker)
+        # Default Work path: pull any newer Notion question first, then surface sourced card
+        updated = await recompute_holding(ticker, pull_from_notion=True, push_saved_question=False)
         idx = next((i + 1 for i, h in enumerate(holdings) if h.ticker == updated.ticker), 1)
         return UtteranceResponse(
             transcript=transcript,
@@ -256,6 +341,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             hud=format_holding_hud(updated, index=idx, total=max(len(holdings), 1)),
             holding=updated,
             pending_write=None,
+            suggested_check=None,
         )
 
     # ------------------------------------------------------------------
@@ -289,7 +375,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         updated = db.update_holding_question(ticker, body.saved_question.strip())
         if not updated:
             raise HTTPException(status_code=404, detail=f"Unknown holding: {ticker}")
-        recomputed = await recompute_holding(ticker)
+        recomputed = await recompute_holding(
+            ticker,
+            pull_from_notion=False,
+            push_saved_question=True,
+        )
         holdings = db.list_holdings()
         idx = next((i + 1 for i, h in enumerate(holdings) if h.ticker == recomputed.ticker), 1)
         return {
@@ -297,20 +387,43 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "hud": format_holding_hud(recomputed, index=idx, total=max(len(holdings), 1)),
         }
 
+    @app.post("/api/stage-check")
+    async def stage_explicit_check(body: StageCheckRequest) -> dict[str, object]:
+        """Stages an explicit proposed check and returns the CONFIRM card displaying its exact wording."""
+        holding = db.get_holding(body.ticker)
+        if not holding:
+            raise HTTPException(status_code=404, detail=f"Unknown holding: {body.ticker}")
+        pending = PendingWrite(
+            id=uuid.uuid4().hex[:12],
+            mind=Mind.WORK,
+            kind="check",
+            content=body.content.strip(),
+            ticker=holding.ticker,
+            source_citation=body.source_citation or holding.source_citation or None,
+            updates_next_check=True,
+        )
+        db.save_pending_write(pending)
+        return {"pending_write": pending, "hud": format_confirm_hud(pending)}
+
     @app.post("/api/holdings/{ticker}/stage-suggested-check")
     async def stage_suggested_check(ticker: str) -> dict[str, object]:
-        """Zero-dictation 1-tap path: stages the holding's AI-drafted next check."""
+        """Stages the holding's AI-drafted next check for explicit on-glasses review."""
         holding = db.get_holding(ticker)
         if not holding:
             raise HTTPException(status_code=404, detail=f"Unknown holding: {ticker}")
-        draft = (holding.suggested_next_check or f"Review {holding.ticker} next earnings call").strip()
+        draft = holding.suggested_next_check.strip()
+        if not draft:
+            raise HTTPException(
+                status_code=409,
+                detail=f"No suggested check available for {holding.ticker} until a matching passage is found.",
+            )
         pending = PendingWrite(
             id=uuid.uuid4().hex[:12],
             mind=Mind.WORK,
             kind="check",
             content=draft,
             ticker=holding.ticker,
-            source_citation=holding.source_citation,
+            source_citation=holding.source_citation or None,
             updates_next_check=True,
         )
         db.save_pending_write(pending)
@@ -319,17 +432,23 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.post("/api/notion/pull")
     async def pull_notion_questions() -> dict[str, object]:
         """Pulls edited saved questions from Notion and recomputes changed holdings."""
-        pulled = await notion.pull_saved_questions()
+        snapshots = await notion.pull_holdings()
         updated_tickers: list[str] = []
-        for ticker, (question, page_id) in pulled.items():
+        for ticker, snap in snapshots.items():
             existing = db.get_holding(ticker)
-            if existing and existing.saved_question != question:
-                db.upsert_holding(
-                    existing.model_copy(update={"saved_question": question, "notion_page_id": page_id})
-                )
-                await recompute_holding(ticker)
+            if not existing:
+                continue
+            question_changed = bool(snap.saved_question and snap.saved_question != existing.saved_question)
+            updates: dict[str, object] = {"notion_page_id": snap.notion_page_id}
+            if snap.saved_question:
+                updates["saved_question"] = snap.saved_question
+            if snap.next_check:
+                updates["next_check"] = snap.next_check
+            db.upsert_holding(existing.model_copy(update=updates))
+            if question_changed:
+                await recompute_holding(ticker, pull_from_notion=False, push_saved_question=False)
                 updated_tickers.append(ticker)
-        return {"pulled_count": len(pulled), "recomputed": updated_tickers}
+        return {"pulled_count": len(snapshots), "recomputed": updated_tickers}
 
     @app.post("/api/text", response_model=UtteranceResponse)
     async def process_text_utterance(body: UtteranceRequest) -> UtteranceResponse:
@@ -366,7 +485,22 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             entry = entry.model_copy(update={"notion_page_id": notion_page_id})
 
         if updated_holding and notion.holdings_enabled:
-            holding_page_id = await notion.sync_holding_update(updated_holding)
+            if not updated_holding.notion_page_id:
+                # Link any pre-existing Notion watchlist row before patching Next Check
+                snapshots = await notion.pull_holdings()
+                snap = snapshots.get(updated_holding.ticker.upper())
+                if snap and snap.notion_page_id:
+                    updated_holding = (
+                        db.update_holding_notion_page_id(updated_holding.ticker, snap.notion_page_id)
+                        or updated_holding.model_copy(update={"notion_page_id": snap.notion_page_id})
+                    )
+
+            holding_page_id = await notion.sync_holding_update(
+                updated_holding,
+                include_finding=False,
+                include_saved_question=False,
+                include_next_check=True,
+            )
             if holding_page_id and holding_page_id != updated_holding.notion_page_id:
                 updated_holding = (
                     db.update_holding_notion_page_id(updated_holding.ticker, holding_page_id)

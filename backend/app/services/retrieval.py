@@ -10,7 +10,27 @@ STOPWORDS = {
     "the", "and", "for", "that", "this", "with", "from", "what", "when", "does",
     "did", "are", "was", "were", "have", "has", "about", "into", "their", "company",
     "management", "expect", "expected", "running", "get", "your", "our", "next",
+    "not", "near", "how", "why", "will", "can", "should", "would", "could", "they",
+    "its", "their", "there", "these", "those", "any", "all",
 }
+
+ENTITY_TOKENS = {
+    "nvda", "nvidia", "msft", "microsoft", "tsm", "tsmc", "corp", "inc", "ltd",
+}
+
+
+def extract_content_tokens(query: str, ticker: str | None = None) -> list[str]:
+    """Extracts meaningful non-stopword, non-entity search tokens from a question."""
+    excluded = set(STOPWORDS) | set(ENTITY_TOKENS)
+    if ticker:
+        excluded.add(ticker.lower())
+    raw_tokens = re.findall(r"[a-zA-Z0-9]+", query.lower())
+    return list(
+        dict.fromkeys(
+            tok for tok in raw_tokens
+            if len(tok) >= 3 and tok not in excluded
+        )
+    )
 
 
 class DocumentRetriever:
@@ -20,17 +40,13 @@ class DocumentRetriever:
         self.db = db
 
     def retrieve(self, ticker: str, query: str, limit: int = 4) -> list[DocumentChunk]:
-        tokens = [
-            tok for tok in re.findall(r"[a-zA-Z0-9]+", query.lower())
-            if len(tok) >= 3 and tok not in STOPWORDS
-        ]
-        if tokens:
-            fts_expr = " OR ".join(dict.fromkeys(tokens))
-            try:
-                hits = self.db.search_chunks_fts(ticker, fts_expr, limit=limit)
-                if hits:
-                    return hits
-            except Exception:
-                # Fall back cleanly to all chunks for this ticker if FTS syntax rejects a token
-                pass
-        return self.db.list_chunks_for_ticker(ticker)[:limit]
+        tokens = extract_content_tokens(query, ticker=ticker)
+        if not tokens:
+            return []
+
+        # Quote every token so FTS5 operators cannot alter query semantics.
+        fts_expr = " OR ".join(f'"{tok}"' for tok in tokens)
+        try:
+            return self.db.search_chunks_fts(ticker, fts_expr, limit=limit)
+        except Exception:
+            return []

@@ -1,0 +1,21 @@
+{
+  "name": "cockpit-g2-glasses",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 127.0.0.1 --port 5173",
+    "build": "tsc --noEmit && vite build",
+    "typecheck": "tsc --noEmit",
+    "preview": "vite preview --host 127.0.0.1 --port 5173",
+    "sim": "evenhub-simulator http://127.0.0.1:5173",
+    "pack": "npm run build && evenhub pack app.json dist -o cockpit.ehpk --sdk-ver 0.0.16"
+  },
+  "dependencies": {
+    "@evenrealities/even_hub_sdk": "^0.0.16"
+  },
+  "devDependencies": {
+    "typescript": "^5.8.2",
+    "vite": "^6.2.0"
+  }
+}

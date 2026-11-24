@@ -87,11 +87,11 @@ class JevRouter:
                     "type": "choice",
                     "instructions": "What action should Cockpit take?",
                     "criteria": {
-                        "log_note": "Save a short personal/interests reflection or takeaway without calling an LLM.",
-                        "log_task": "Save a short reminder or to-do task without calling an LLM.",
-                        "brief_holding": "Open or review an earnings summary card for a portfolio holding.",
-                        "follow_up_source": "Ask a factual follow-up question against an earnings release or call transcript.",
-                        "draft_next_check": "Record a watch item / question to check at the next earnings call.",
+                        "log_note": "Save a short personal or interests reflection, podcast/book reaction, or general thought without calling an LLM.",
+                        "log_task": "Save a short personal reminder, errand, gift, or to-do task without calling an LLM.",
+                        "brief_holding": "Open or refresh the general earnings overview card for a holding (e.g. 'review NVIDIA earnings', 'what changed?'), NOT a specific detailed question.",
+                        "follow_up_source": "Ask a specific factual follow-up question about a metric, driver, margin recovery, management comment, or outlook from an earnings call or release.",
+                        "draft_next_check": "Explicitly dictate a watch item or question to check at the next earnings call or next quarter.",
                         "clarify": "The utterance is genuinely ambiguous and needs a quick tap clarification.",
                     },
                 },
@@ -160,38 +160,45 @@ class JevRouter:
         if not self.settings.live_openrouter_enabled:
             return self._mock_select_chunk(question, candidates)
 
+        passages_block = "\n".join(
+            f"- chunk_{c.id} [{c.page_ref}] {c.headline}: {c.excerpt}"
+            for c in candidates
+        )
         criteria = {
-            f"chunk_{c.id}": f"[{c.page_ref}] {c.headline}: {c.excerpt}"
+            f"chunk_{c.id}": f"Passage chunk_{c.id} ({c.headline}) directly answers the wearer's question."
             for c in candidates
         }
         criteria["none"] = "None of the candidate passages actually answer the wearer's question."
 
         payload = {
             "model": self.settings.openrouter_jev_model,
-            "state": f"Wearer's question: {question}",
+            "state": (
+                f"Wearer's question: {question}\n\n"
+                f"Candidate source passages:\n{passages_block}"
+            ),
             "questions": {
                 "is_answered": {
                     "type": "noul",
                     "instructions": (
-                        "Do any of the candidate passages actually contain information "
-                        "that directly answers the wearer's question?"
+                        "Does at least one of the candidate source passages listed in state "
+                        "directly answer the wearer's question?"
                     ),
                 },
                 "best_chunk": {
                     "type": "choice",
                     "instructions": (
-                        "Select the single sourced passage that most directly answers the wearer's "
-                        "question, or 'none' if none of the passages address it."
+                        "Select the single chunk ID from state that most directly answers the "
+                        "wearer's question, or 'none' if no passage answers it."
                     ),
                     "criteria": criteria,
                 },
                 "verdict": {
                     "type": "choice",
-                    "instructions": "How does this finding compare against prior expectations?",
+                    "instructions": "For the matching passage in state, how does the result compare to prior expectations?",
                     "criteria": {
                         "HELD": "In line with or already flagged by prior guidance.",
                         "AHEAD": "Clearly beat prior guidance or expectations.",
-                        "WATCH": "Requires monitoring or follow-up next quarter.",
+                        "WATCH": "Explains a driver or risk that requires monitoring next quarter.",
                     },
                 },
             },

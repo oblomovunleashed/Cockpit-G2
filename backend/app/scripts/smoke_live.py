@@ -3,8 +3,12 @@ from __future__ import annotations
 import argparse
 import asyncio
 import math
+import shutil
 import struct
+import subprocess
+import tempfile
 import time
+from pathlib import Path
 
 from app.config import Settings
 from app.db import CockpitDB, utc_now_iso
@@ -44,6 +48,21 @@ def _make_tone_wav(duration_ms: int = 500, sample_rate: int = 16000) -> bytes:
     return header + bytes(samples)
 
 
+def _make_speech_wav(phrase: str = "Can we review NVIDIA earnings?") -> tuple[bytes, str]:
+    """Uses macOS `say` to generate a real 16 kHz mono 16-bit spoken WAV clip when available."""
+    if shutil.which("say"):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            out_path = Path(tmpdir) / "smoke.wav"
+            proc = subprocess.run(
+                ["say", "-o", str(out_path), "--data-format=LEI16@16000", phrase],
+                capture_output=True,
+                check=False,
+            )
+            if proc.returncode == 0 and out_path.exists() and out_path.stat().st_size > 44:
+                return out_path.read_bytes(), f"macOS speech ({phrase!r})"
+    return _make_tone_wav(), "440Hz tone fallback"
+
+
 async def run_smoke(*, test_notion_write: bool) -> None:
     settings = Settings()
     print("=== Cockpit-G2 Live Smoke Check ===")
@@ -76,6 +95,7 @@ async def run_smoke(*, test_notion_write: bool) -> None:
             "Remember to buy a birthday present",
             "Can we review NVIDIA earnings?",
             "What did management expect to bring margins back up?",
+            "At the next call, check whether those price increases are on schedule.",
         ]
         for text in utterances:
             try:
@@ -126,10 +146,10 @@ async def run_smoke(*, test_notion_write: bool) -> None:
         print("\n4) OpenRouter STT Check (POST /api/v1/audio/transcriptions)")
         try:
             t0 = time.perf_counter()
-            wav = _make_tone_wav()
+            wav, wav_desc = _make_speech_wav()
             txt = await stt.transcribe_wav(wav)
             ms = int((time.perf_counter() - t0) * 1000)
-            print(f"   ✓ STT endpoint reachable ({ms}ms); transcript={txt!r}")
+            print(f"   ✓ STT succeeded ({ms}ms, source={wav_desc}) -> {txt!r}")
         except Exception as exc:
             print(f"   ! STT returned: {exc}")
             try:

@@ -1,6 +1,7 @@
 import type {
   ConfirmWriteResponse,
   DeckStateResponse,
+  DraftCheck,
   HoldingRecord,
   HudCard,
   PendingWrite,
@@ -50,12 +51,29 @@ export class CockpitApiClient {
     return (await res.json()) as UtteranceResponse;
   }
 
+  async stageCheck(
+    draft: DraftCheck,
+  ): Promise<{ pending_write: PendingWrite; hud: HudCard }> {
+    const res = await fetch(`${this.baseUrl}/api/stage-check`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        ticker: draft.ticker,
+        content: draft.content,
+        source_citation: draft.source_citation,
+      }),
+    });
+    if (!res.ok) throw new Error(`POST /api/stage-check failed (${res.status})`);
+    return (await res.json()) as { pending_write: PendingWrite; hud: HudCard };
+  }
+
   async stageSuggestedCheck(
     ticker: string,
   ): Promise<{ pending_write: PendingWrite; hud: HudCard }> {
-    const res = await fetch(`${this.baseUrl}/api/holdings/${encodeURIComponent(ticker)}/stage-suggested-check`, {
-      method: 'POST',
-    });
+    const res = await fetch(
+      `${this.baseUrl}/api/holdings/${encodeURIComponent(ticker)}/stage-suggested-check`,
+      { method: 'POST' },
+    );
     if (!res.ok) throw new Error(`POST stage-suggested-check failed (${res.status})`);
     return (await res.json()) as { pending_write: PendingWrite; hud: HudCard };
   }

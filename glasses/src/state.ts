@@ -1,4 +1,11 @@
-import type { HoldingRecord, HudCard, JevDecision, JournalEntry, PendingWrite } from './types';
+import type {
+  DraftCheck,
+  HoldingRecord,
+  HudCard,
+  JevDecision,
+  JournalEntry,
+  PendingWrite,
+} from './types';
 
 export type ViewMode = 'BRIEFING' | 'LISTENING' | 'PROCESSING' | 'CONFIRM_WRITE' | 'RESULT';
 
@@ -7,6 +14,7 @@ export interface CockpitState {
   holdings: HoldingRecord[];
   holdingIndex: number;
   pendingWrite: PendingWrite | null;
+  suggestedCheck: DraftCheck | null;
   lastDecision: JevDecision | null;
   recentJournal: JournalEntry[];
   mockMode: boolean;
@@ -19,6 +27,7 @@ export function createInitialState(): CockpitState {
     holdings: [],
     holdingIndex: 0,
     pendingWrite: null,
+    suggestedCheck: null,
     lastDecision: null,
     recentJournal: [],
     mockMode: true,
@@ -43,10 +52,16 @@ export function holdingToCard(state: CockpitState): HudCard {
   }
   const pos = state.holdingIndex + 1;
   const total = state.holdings.length;
+  const verdictPart = holding.verdict ? ` · ${holding.verdict}` : '';
+  const sourceLine = holding.source_citation ? `\n[${holding.source_citation}]` : '';
   const nextLine = holding.next_check ? `\nNext: ${holding.next_check}` : '';
+  const footer = holding.suggested_next_check
+    ? 'Hold: speak · Tap: review check · Swipe: next'
+    : 'Hold: ask or dictate check · Swipe: next';
+
   return {
-    header: `WORK · ${holding.ticker} ${pos}/${total} · ${holding.verdict}`,
-    body: `${holding.latest_finding}\n[${holding.source_citation}]${nextLine}`,
-    footer: 'Hold: speak · Tap: save check · Swipe: next',
+    header: `WORK · ${holding.ticker} ${pos}/${total}${verdictPart}`,
+    body: `${holding.latest_finding}${sourceLine}${nextLine}`,
+    footer,
   };
 }

@@ -30,7 +30,7 @@ export interface HoldingRecord {
   ticker: string;
   company: string;
   saved_question: string;
-  verdict: Verdict;
+  verdict: Verdict | null;
   latest_finding: string;
   source_citation: string;
   suggested_next_check: string;
@@ -60,12 +60,19 @@ export interface PendingWrite {
   updates_next_check: boolean;
 }
 
+export interface DraftCheck {
+  content: string;
+  ticker: string;
+  source_citation: string | null;
+}
+
 export interface UtteranceResponse {
   transcript: string;
   decision: JevDecision;
   hud: HudCard;
   holding: HoldingRecord | null;
   pending_write: PendingWrite | null;
+  suggested_check: DraftCheck | null;
 }
 
 export interface ConfirmWriteResponse {

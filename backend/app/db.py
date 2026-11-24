@@ -144,7 +144,7 @@ class CockpitDB:
                     holding.ticker.upper(),
                     holding.company,
                     holding.saved_question,
-                    holding.verdict.value,
+                    holding.verdict.value if holding.verdict is not None else "",
                     holding.latest_finding,
                     holding.source_citation,
                     holding.suggested_next_check,
@@ -170,7 +170,7 @@ class CockpitDB:
         self,
         ticker: str,
         *,
-        verdict: Verdict,
+        verdict: Verdict | None,
         latest_finding: str,
         source_citation: str,
         suggested_next_check: str,
@@ -184,7 +184,14 @@ class CockpitDB:
                     suggested_next_check = ?, updated_at = ?
                 WHERE UPPER(ticker) = UPPER(?)
                 """,
-                (verdict.value, latest_finding, source_citation, suggested_next_check, now, ticker),
+                (
+                    verdict.value if verdict is not None else "",
+                    latest_finding,
+                    source_citation,
+                    suggested_next_check,
+                    now,
+                    ticker,
+                ),
             )
             if cur.rowcount == 0:
                 return None
@@ -456,11 +463,12 @@ class CockpitDB:
 
     @staticmethod
     def _row_to_holding(row: sqlite3.Row) -> HoldingRecord:
+        raw_verdict = (row["verdict"] or "").strip()
         return HoldingRecord(
             ticker=row["ticker"],
             company=row["company"],
             saved_question=row["saved_question"],
-            verdict=Verdict(row["verdict"]),
+            verdict=Verdict(raw_verdict) if raw_verdict else None,
             latest_finding=row["latest_finding"],
             source_citation=row["source_citation"],
             suggested_next_check=row["suggested_next_check"],

@@ -64,7 +64,7 @@ class HoldingRecord(BaseModel):
     ticker: str
     company: str
     saved_question: str
-    verdict: Verdict = Verdict.PENDING
+    verdict: Verdict | None = None
     latest_finding: str = ""
     source_citation: str = ""
     suggested_next_check: str = ""
@@ -94,6 +94,20 @@ class PendingWrite(BaseModel):
     updates_next_check: bool = False
 
 
+class DraftCheck(BaseModel):
+    """Proposed next-quarter check surfaced for explicit review before confirmation."""
+
+    content: str
+    ticker: str
+    source_citation: str | None = None
+
+
+class StageCheckRequest(BaseModel):
+    ticker: str
+    content: str = Field(..., min_length=1, max_length=1000)
+    source_citation: str | None = None
+
+
 class UtteranceRequest(BaseModel):
     transcript: str = Field(..., min_length=1, max_length=1000)
     active_ticker: str | None = None
@@ -105,6 +119,7 @@ class UtteranceResponse(BaseModel):
     hud: HudCard
     holding: HoldingRecord | None = None
     pending_write: PendingWrite | None = None
+    suggested_check: DraftCheck | None = None
 
 
 class ConfirmWriteRequest(BaseModel):

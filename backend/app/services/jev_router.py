@@ -5,6 +5,7 @@ import httpx
 
 from app.config import Settings
 from app.models import ActionType, DocumentChunk, JevDecision, Mind, Verdict
+from app.services.retrieval import extract_content_tokens
 
 
 class JevRouter:
@@ -117,12 +118,13 @@ class JevRouter:
         self,
         question: str,
         candidates: list[DocumentChunk],
-    ) -> tuple[DocumentChunk, Verdict, float]:
-        """Use Jev to pick the single candidate passage that best answers the saved question."""
+    ) -> tuple[DocumentChunk, Verdict, float] | None:
+        """
+        Use Jev to pick the single candidate passage that directly answers the saved question.
+        Returns None when no candidate passage supports the question.
+        """
         if not candidates:
-            raise ValueError("Cannot select from empty candidate list.")
-        if len(candidates) == 1:
-            return candidates[0], candidates[0].verdict, 1.0
+            return None
 
         if not self.settings.live_openrouter_enabled:
             return self._mock_select_chunk(question, candidates)
@@ -131,13 +133,25 @@ class JevRouter:
             f"chunk_{c.id}": f"[{c.page_ref}] {c.headline}: {c.excerpt}"
             for c in candidates
         }
+        criteria["none"] = "None of the candidate passages actually answer the wearer's question."
+
         payload = {
             "model": self.settings.openrouter_jev_model,
             "state": f"Wearer's question: {question}",
             "questions": {
+                "is_answered": {
+                    "type": "noul",
+                    "instructions": (
+                        "Do any of the candidate passages actually contain information "
+                        "that directly answers the wearer's question?"
+                    ),
+                },
                 "best_chunk": {
                     "type": "choice",
-                    "instructions": "Select the single sourced passage that most directly answers the wearer's question.",
+                    "instructions": (
+                        "Select the single sourced passage that most directly answers the wearer's "
+                        "question, or 'none' if none of the passages address it."
+                    ),
                     "criteria": criteria,
                 },
                 "verdict": {
@@ -152,11 +166,17 @@ class JevRouter:
             },
         }
         answers = await self._call_jev(payload)
-        chosen_key = answers.get("best_chunk", {}).get("choice", f"chunk_{candidates[0].id}")
-        confidence = float(answers.get("best_chunk", {}).get("confidence", 0.9))
-        verdict_str = answers.get("verdict", {}).get("choice", candidates[0].verdict.value)
+        is_answered_p = float(answers.get("is_answered", {}).get("noul", 1.0))
+        chosen_key = answers.get("best_chunk", {}).get("choice", "none")
+        confidence = float(answers.get("best_chunk", {}).get("confidence", 0.0))
 
-        chosen = next((c for c in candidates if f"chunk_{c.id}" == chosen_key), candidates[0])
+        if chosen_key == "none" or is_answered_p < 0.5:
+            return None
+
+        chosen = next((c for c in candidates if f"chunk_{c.id}" == chosen_key), None)
+        if chosen is None:
+            return None
+        verdict_str = answers.get("verdict", {}).get("choice", chosen.verdict.value)
         return chosen, Verdict(verdict_str), confidence
 
     async def _call_jev(self, payload: dict) -> dict:
@@ -273,14 +293,24 @@ class JevRouter:
         )
 
     @staticmethod
-    def _mock_select_chunk(question: str, candidates: list[DocumentChunk]) -> tuple[DocumentChunk, Verdict, float]:
-        q_tokens = set(re.findall(r"[a-z0-9]+", question.lower()))
-        best = candidates[0]
-        best_score = -1.0
+    def _mock_select_chunk(
+        question: str,
+        candidates: list[DocumentChunk],
+    ) -> tuple[DocumentChunk, Verdict, float] | None:
+        ticker = candidates[0].ticker if candidates else None
+        q_tokens = set(extract_content_tokens(question, ticker=ticker))
+        if not q_tokens:
+            return None
+
+        best: DocumentChunk | None = None
+        best_score = 0.0
         for chunk in candidates:
             haystack = f"{chunk.topic} {chunk.headline} {chunk.summary_card} {chunk.excerpt}".lower()
-            c_tokens = set(re.findall(r"[a-z0-9]+", haystack))
+            c_tokens = set(extract_content_tokens(haystack, ticker=chunk.ticker))
             overlap = len(q_tokens & c_tokens)
+            if overlap == 0:
+                continue
+
             # Emphasize topic-specific discriminators for the NVDA demo
             bonus = 0.0
             if "revenue" in q_tokens and "revenue" in chunk.topic.lower():
@@ -293,4 +323,7 @@ class JevRouter:
             if score > best_score:
                 best_score = score
                 best = chunk
+
+        if best is None or best_score <= 0.0:
+            return None
         return best, best.verdict, 0.94

@@ -12,7 +12,7 @@ import {
   MENU_ITEM_PULL_NOTION,
   MENU_ITEM_REFRESH,
 } from './hud';
-import { dispatchEvenHubEvent, executeTapAction } from './input';
+import { dispatchEvenHubEvent, executeTapAction, nextViewModeFromUtterance } from './input';
 import { activeHolding, createInitialState, holdingToCard, type CockpitState } from './state';
 import type { HudCard, JevDecision } from './types';
 
@@ -132,11 +132,7 @@ async function submitTextUtterance(transcript: string): Promise<void> {
       }
     }
 
-    state.mode = res.pending_write
-      ? 'CONFIRM_WRITE'
-      : res.suggested_check
-        ? 'RESULT'
-        : 'BRIEFING';
+    state.mode = nextViewModeFromUtterance(res);
     updateCompanionPanel(res.decision);
     await showCard(res.hud);
   } catch (err) {
@@ -244,11 +240,7 @@ async function stopVoiceCaptureAndRoute(): Promise<void> {
         state.holdingIndex = idx;
       }
     }
-    state.mode = res.pending_write
-      ? 'CONFIRM_WRITE'
-      : res.suggested_check
-        ? 'RESULT'
-        : 'BRIEFING';
+    state.mode = nextViewModeFromUtterance(res);
     updateCompanionPanel(res.decision);
     await showCard(res.hud);
   } catch (err) {

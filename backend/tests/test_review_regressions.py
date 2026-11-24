@@ -357,3 +357,42 @@ async def test_notion_recompute_patch_omits_saved_question_and_next_check(
     assert set(props.keys()) == {"Status", "Latest Finding", "Source"}
     assert "Saved Question" not in props
     assert "Next Check" not in props
+
+
+def test_clearing_next_check_in_notion_clears_local_value_on_briefing_and_pull(
+    tmp_path: Path,
+) -> None:
+    """Clearing Next Check to empty string in Notion must clear stale local next_check on both refresh paths."""
+    app = create_app(_make_settings(tmp_path, with_notion=True))
+    runtime = app.state.runtime
+    runtime.db.update_holding_notion_page_id("NVDA", "watchlist-nvda-1")
+    runtime.db.update_holding_next_check("NVDA", "Old check to clear")
+
+    async def fake_pull_holdings():
+        return {
+            "NVDA": NotionHoldingSnapshot(
+                ticker="NVDA",
+                saved_question="Does NVIDIA expect the margin trough to get deeper?",
+                next_check="",
+                notion_page_id="watchlist-nvda-1",
+            )
+        }
+
+    async def fake_sync_holding(holding, **_kwargs) -> str:
+        return holding.notion_page_id or "watchlist-nvda-1"
+
+    runtime.notion.pull_holdings = fake_pull_holdings  # type: ignore[method-assign]
+    runtime.notion.sync_holding_update = fake_sync_holding  # type: ignore[method-assign]
+
+    with TestClient(app) as client:
+        # 1. Briefing refresh clears local next_check when Notion returns ""
+        brief = client.post("/api/text", json={"transcript": "Can we review NVIDIA earnings?"})
+        assert brief.status_code == 200
+        assert brief.json()["holding"]["next_check"] == ""
+        assert runtime.db.get_holding("NVDA").next_check == ""
+
+        # 2. Manual /api/notion/pull also clears local next_check when Notion returns ""
+        runtime.db.update_holding_next_check("NVDA", "Another stale check")
+        pulled = client.post("/api/notion/pull")
+        assert pulled.status_code == 200
+        assert runtime.db.get_holding("NVDA").next_check == ""

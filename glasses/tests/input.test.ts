@@ -9,11 +9,12 @@ import {
 import {
   dispatchEvenHubEvent,
   executeTapAction,
+  nextViewModeFromUtterance,
   resolveGestureEventType,
   type TapActionDeps,
 } from '../src/input.ts';
 import type { CockpitState } from '../src/state.ts';
-import type { ConfirmWriteResponse, HudCard } from '../src/types.ts';
+import type { ConfirmWriteResponse, HudCard, UtteranceResponse } from '../src/types.ts';
 
 function makeState(overrides: Partial<CockpitState> = {}): CockpitState {
   return {
@@ -265,4 +266,96 @@ test('tapping a holding with no matching passage does not stage or save a check'
   assert.equal(stageCalls, 0);
   assert.equal(confirmCalls, 0);
   assert.equal(state.mode, 'BRIEFING');
+});
+
+test('tapping a no-match follow-up card does not fall through to the holding old suggested check', async () => {
+  const holdingWithCheck = {
+    ticker: 'NVDA',
+    company: 'NVIDIA Corp.',
+    saved_question: 'Does NVIDIA expect the margin trough to get deeper?',
+    verdict: 'HELD' as const,
+    latest_finding: 'Q4 FY27 gross margin guide · 71-72%.',
+    source_citation: 'Q3 FY27 PR · Nov 17',
+    suggested_next_check: 'Check whether Q1 FY28 price increases are on schedule',
+    next_check: '',
+    notion_page_id: null,
+    updated_at: '2026-11-24T14:35:00Z',
+  };
+
+  const noMatchResponse: UtteranceResponse = {
+    transcript: 'What did management say about warranty reserves?',
+    decision: {
+      mind: 'work',
+      action: 'follow_up_source',
+      holding: 'NVDA',
+      needs_llm_worker: true,
+      confidence: 0.93,
+      mode: 'mock',
+      reasoning: 'Work follow-up question requires source retrieval + worker.',
+    },
+    hud: {
+      header: 'WORK · NVDA · NO MATCH',
+      body: 'No matching passage in indexed filings for this question.',
+      footer: 'Hold: ask again or dictate check',
+    },
+    holding: holdingWithCheck,
+    pending_write: null,
+    suggested_check: null,
+  };
+
+  const state = makeState({
+    mode: nextViewModeFromUtterance(noMatchResponse),
+    holdings: [holdingWithCheck],
+    pendingWrite: noMatchResponse.pending_write,
+    suggestedCheck: noMatchResponse.suggested_check,
+  });
+
+  assert.equal(state.mode, 'RESULT');
+
+  let stageSuggestedCalls = 0;
+  let confirmCalls = 0;
+  const deps: TapActionDeps = {
+    isRecording: () => false,
+    getActiveHolding: (s) => s.holdings[0] ?? null,
+    stageCheck: async () => {
+      throw new Error('should not stage draft check');
+    },
+    stageSuggestedCheck: async () => {
+      stageSuggestedCalls += 1;
+      return {
+        pending_write: {
+          id: 'old-check',
+          mind: 'work',
+          kind: 'check',
+          content: holdingWithCheck.suggested_next_check,
+          ticker: 'NVDA',
+          source_citation: holdingWithCheck.source_citation,
+          updates_next_check: true,
+        },
+        hud: {
+          header: 'WORK · NVDA · CONFIRM CHECK',
+          body: holdingWithCheck.suggested_next_check,
+          footer: 'Tap: save to journal · Swipe: cancel',
+        },
+      };
+    },
+    confirmWrite: async () => {
+      confirmCalls += 1;
+      throw new Error('should not confirm');
+    },
+    refreshDeckAfterSave: async () => {},
+    showCard: async () => {},
+  };
+
+  // Tapping on the NO MATCH follow-up card must NOT stage the holding's unrelated old check
+  await executeTapAction(state, deps);
+  assert.equal(stageSuggestedCalls, 0);
+  assert.equal(confirmCalls, 0);
+  assert.equal(state.mode, 'RESULT');
+
+  // Once the user returns to BRIEFING deck, tapping on the holding card works normally again
+  state.mode = 'BRIEFING';
+  await executeTapAction(state, deps);
+  assert.equal(stageSuggestedCalls, 1);
+  assert.equal(state.mode, 'CONFIRM_WRITE');
 });

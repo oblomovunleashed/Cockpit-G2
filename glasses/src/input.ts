@@ -1,11 +1,12 @@
 import { OsEventTypeList, type EvenHubEvent } from '@evenrealities/even_hub_sdk';
-import type { CockpitState } from './state';
+import type { CockpitState, ViewMode } from './state';
 import type {
   ConfirmWriteResponse,
   DraftCheck,
   HoldingRecord,
   HudCard,
   PendingWrite,
+  UtteranceResponse,
 } from './types';
 
 export interface EvenHubHandlers {
@@ -101,6 +102,21 @@ export function dispatchEvenHubEvent(event: EvenHubEvent, handlers: EvenHubHandl
 }
 
 /**
+ * Determines the view mode after processing an utterance response.
+ * Follow-up cards (including NO MATCH results) enter RESULT rather than BRIEFING
+ * so tapping on a NO MATCH card never falls through to the holding's old check.
+ */
+export function nextViewModeFromUtterance(res: UtteranceResponse): ViewMode {
+  if (res.pending_write) {
+    return 'CONFIRM_WRITE';
+  }
+  if (res.decision.action === 'brief_holding') {
+    return 'BRIEFING';
+  }
+  return 'RESULT';
+}
+
+/**
  * Executes the single-tap action with two core safety invariants:
  * 1. Never fires duplicate saves while PROCESSING or recording.
  * 2. Never saves a draft whose exact wording has not already been displayed on the CONFIRM card.
@@ -157,7 +173,11 @@ export async function executeTapAction(state: CockpitState, deps: TapActionDeps)
     return;
   }
 
-  // Step 1b: On a holding card, preview its suggested check only if one exists
+  // Step 1b: Only on a BRIEFING holding card, preview its suggested check if one exists
+  if (state.mode !== 'BRIEFING') {
+    return;
+  }
+
   const current = deps.getActiveHolding(state);
   if (current && current.suggested_next_check.trim()) {
     state.mode = 'PROCESSING';

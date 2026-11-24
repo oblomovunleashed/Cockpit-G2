@@ -109,7 +109,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             updates["notion_page_id"] = snap.notion_page_id
         if snap.saved_question and snap.saved_question != holding.saved_question:
             updates["saved_question"] = snap.saved_question
-        if snap.next_check and snap.next_check != holding.next_check:
+        if snap.next_check != holding.next_check:
             updates["next_check"] = snap.next_check
         if updates:
             return db.upsert_holding(holding.model_copy(update=updates))
@@ -442,7 +442,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             updates: dict[str, object] = {"notion_page_id": snap.notion_page_id}
             if snap.saved_question:
                 updates["saved_question"] = snap.saved_question
-            if snap.next_check:
+            if snap.next_check != existing.next_check:
                 updates["next_check"] = snap.next_check
             db.upsert_holding(existing.model_copy(update=updates))
             if question_changed:

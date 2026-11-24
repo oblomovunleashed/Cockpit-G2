@@ -25,7 +25,7 @@ const browserMic = new BrowserMicRecorder();
 const state: CockpitState = createInitialState();
 
 function isAnyMicRecording(): boolean {
-  return recorder.isRecording || browserMic.isRecording;
+  return recorder.isRecording || browserMic.isActive;
 }
 
 let bridge: EvenAppBridge | null = null;
@@ -271,7 +271,11 @@ async function stopVoiceCaptureAndRoute(): Promise<void> {
 async function startBrowserMicCapture(): Promise<void> {
   if (state.mode === 'PROCESSING' || isAnyMicRecording()) return;
   try {
-    await browserMic.start();
+    const started = await browserMic.start();
+    if (!started) {
+      // Button was released while getUserMedia permission was pending; stay on current view.
+      return;
+    }
     state.mode = 'LISTENING';
     await showCard({
       header: 'COCKPIT · ● LISTENING (MIC)',
@@ -289,8 +293,16 @@ async function startBrowserMicCapture(): Promise<void> {
 }
 
 async function stopBrowserMicAndRoute(): Promise<void> {
-  if (!browserMic.isRecording) return;
+  if (!browserMic.isActive) return;
+  const wasListening = state.mode === 'LISTENING';
   const wavBlob = await browserMic.stop();
+  if (!wavBlob) {
+    if (wasListening) {
+      state.mode = 'BRIEFING';
+      await showCard(holdingToCard(state));
+    }
+    return;
+  }
   await routeWavBlob(wavBlob);
 }
 
@@ -332,12 +344,12 @@ function wireCompanionControls(): void {
     void stopBrowserMicAndRoute();
   });
   micBtn?.addEventListener('pointerleave', () => {
-    if (browserMic.isRecording) {
+    if (browserMic.isActive) {
       void stopBrowserMicAndRoute();
     }
   });
   micBtn?.addEventListener('pointercancel', () => {
-    if (browserMic.isRecording) {
+    if (browserMic.isActive) {
       void stopBrowserMicAndRoute();
     }
   });

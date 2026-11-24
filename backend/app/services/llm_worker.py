@@ -5,7 +5,7 @@ import httpx
 
 from app.config import Settings
 from app.models import DocumentChunk, DraftCheck, HoldingRecord, Verdict
-from app.services.work_skills import build_mock_peer_read_across
+from app.services.work_skills import build_grounded_peer_read_across
 
 
 class LLMWorker:
@@ -63,7 +63,7 @@ class LLMWorker:
         Cross-company synthesis skill: connects a verified peer filing passage
         (e.g. TSMC CoWoS / Microsoft capex) to the target holding's saved thesis question.
         """
-        fallback_finding, fallback_draft = build_mock_peer_read_across(
+        fallback_finding, fallback_draft = build_grounded_peer_read_across(
             target=target,
             peer_ticker=peer_ticker,
             peer_chunk=peer_chunk,

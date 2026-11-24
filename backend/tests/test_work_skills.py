@@ -4,7 +4,11 @@ from pathlib import Path
 from fastapi.testclient import TestClient
 
 from app.config import Settings
+from app.db import CockpitDB
 from app.main import create_app
+from app.models import HoldingRecord, Mind, Verdict
+from app.seed import seed_if_empty
+from app.services.retrieval import DocumentRetriever
 
 
 def _make_app(tmp_path: Path):
@@ -113,3 +117,150 @@ def test_peer_read_across_unsupported_topic_returns_no_match(tmp_path: Path) -> 
         assert "No matching passage" in payload["hud"]["body"]
         assert payload["pending_write"] is None
         assert payload["suggested_check"] is None
+
+
+def test_peer_read_across_topic_specific_margin_uses_selected_passage_not_canned_cowos(
+    tmp_path: Path,
+) -> None:
+    """
+    Asking specifically about TSMC gross-margin read-across to NVIDIA must derive BOTH the
+    fallback card and proposed check from the selected margin passage (66.4% / N2 ramp),
+    never from a canned CoWoS/revenue narrative mismatched with the citation.
+    """
+    with TestClient(_make_app(tmp_path)) as client:
+        resp = client.post(
+            "/api/text",
+            json={
+                "transcript": "What's the TSMC gross margin read-across to NVIDIA?",
+                "active_ticker": "NVDA",
+            },
+        )
+        assert resp.status_code == 200
+        payload = resp.json()
+        assert payload["decision"]["action"] == "peer_read_across"
+        assert payload["hud"]["header"] == "PEER · TSM → NVDA"
+        assert "66.4%" in payload["hud"]["body"]
+        assert "TSMC Q3 2026 PR" in payload["hud"]["body"]
+        assert "CoWoS" not in payload["hud"]["body"]
+        assert "66.4%" in payload["suggested_check"]["content"]
+        assert "CoWoS" not in payload["suggested_check"]["content"]
+        assert payload["suggested_check"]["source_citation"] == "Peer read: TSMC Q3 2026 PR · Oct 15"
+
+
+def test_seed_migrates_legacy_placeholders_idempotently_while_preserving_user_data(
+    tmp_path: Path,
+) -> None:
+    """Upgrading a pre-existing DB with placeholder TSM/MSFT rows replaces placeholders without clobbering user data."""
+    db = CockpitDB(tmp_path / "legacy.db")
+
+    # Seed legacy placeholder holdings and chunks exactly as created by PR #1-#3
+    db.upsert_holding(
+        HoldingRecord(
+            ticker="NVDA",
+            company="NVIDIA Corp.",
+            saved_question="Does NVIDIA expect the margin trough to get deeper?",
+            verdict=Verdict.HELD,
+            latest_finding="Q4 FY27 gross margin guide · 71-72%.",
+            source_citation="Q3 FY27 PR · Nov 17",
+            suggested_next_check="Check price hikes",
+            next_check="Custom NVDA check",
+            notion_page_id="nvda-notion-1",
+            updated_at="2026-11-24T00:00:00Z",
+        )
+    )
+    db.upsert_holding(
+        HoldingRecord(
+            ticker="MSFT",
+            company="Microsoft Corp. (placeholder slot — swap real filings)",
+            saved_question="My custom Microsoft Azure capex question?",
+            verdict=Verdict.WATCH,
+            latest_finding="Seed placeholder ready for real MSFT issuer release/transcript ingestion.",
+            source_citation="Replace with real filing excerpt",
+            suggested_next_check="Check Azure capacity ramp cadence next quarter",
+            next_check="My custom MSFT next check",
+            notion_page_id="msft-notion-1",
+            updated_at="2026-11-24T00:00:00Z",
+        )
+    )
+    db.upsert_holding(
+        HoldingRecord(
+            ticker="TSM",
+            company="TSMC (placeholder slot — swap real filings)",
+            saved_question="My custom TSMC N2 margin question?",
+            verdict=Verdict.AHEAD,
+            latest_finding="Seed placeholder ready for real TSMC issuer release/transcript ingestion.",
+            source_citation="Replace with real filing excerpt",
+            suggested_next_check="Check N2 utilization",
+            next_check="My custom TSM next check",
+            notion_page_id="tsm-notion-1",
+            updated_at="2026-11-24T00:00:00Z",
+        )
+    )
+    db.insert_chunks(
+        [
+            {
+                "ticker": "MSFT",
+                "doc_title": "Placeholder Issuer Filing Slot (MSFT)",
+                "doc_date": "2026-11-01",
+                "page_ref": "Placeholder · Replace with real filing",
+                "topic": "azure cloud",
+                "headline": "MSFT placeholder finding",
+                "summary_card": "Placeholder MSFT card",
+                "verdict": Verdict.WATCH.value,
+                "suggested_next_check": "Placeholder check",
+                "excerpt": "Placeholder passage for MSFT.",
+                "source_url": "",
+            },
+            {
+                "ticker": "TSM",
+                "doc_title": "Placeholder Issuer Filing Slot (TSM)",
+                "doc_date": "2026-11-01",
+                "page_ref": "Placeholder · Replace with real filing",
+                "topic": "n2 wafer",
+                "headline": "TSM placeholder finding",
+                "summary_card": "Placeholder TSM card",
+                "verdict": Verdict.AHEAD.value,
+                "suggested_next_check": "Placeholder check",
+                "excerpt": "Placeholder passage for TSM.",
+                "source_url": "",
+            },
+        ]
+    )
+    db.add_journal_entry(mind=Mind.PERSONAL, kind="task", content="Buy birthday present")
+
+    # Run migration twice to confirm idempotency
+    seed_if_empty(db)
+    chunk_count_after_first = db.count_chunks()
+    seed_if_empty(db)
+    assert db.count_chunks() == chunk_count_after_first
+
+    # Real filings replaced placeholders and are searchable in FTS5
+    retriever = DocumentRetriever(db)
+    tsm_hits = retriever.retrieve("TSM", "CoWoS packaging", limit=4)
+    assert len(tsm_hits) == 1
+    assert "$52.3-$54.3 billion" in tsm_hits[0].excerpt
+
+    msft_hits = retriever.retrieve("MSFT", "GB300 capex", limit=4)
+    assert len(msft_hits) == 1
+    assert "$45.2 billion" in msft_hits[0].excerpt
+
+    # Holding metadata upgraded while user saved_question, next_check, notion_page_id, and journal survive
+    msft = db.get_holding("MSFT")
+    assert msft is not None
+    assert "placeholder" not in msft.company.lower()
+    assert "48% YoY" in msft.latest_finding
+    assert msft.saved_question == "My custom Microsoft Azure capex question?"
+    assert msft.next_check == "My custom MSFT next check"
+    assert msft.notion_page_id == "msft-notion-1"
+
+    tsm = db.get_holding("TSM")
+    assert tsm is not None
+    assert "placeholder" not in tsm.company.lower()
+    assert "66.4%" in tsm.latest_finding
+    assert tsm.saved_question == "My custom TSMC N2 margin question?"
+    assert tsm.next_check == "My custom TSM next check"
+    assert tsm.notion_page_id == "tsm-notion-1"
+
+    journal = db.list_journal_entries()
+    assert len(journal) == 1
+    assert journal[0].content == "Buy birthday present"

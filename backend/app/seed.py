@@ -220,5 +220,17 @@ def seed_if_empty(db: CockpitDB) -> None:
         now = utc_now_iso()
         for holding in SEED_HOLDINGS:
             db.upsert_holding(holding.model_copy(update={"updated_at": now}))
+    else:
+        # Idempotently migrate any legacy placeholder holdings from earlier versions
+        # while preserving saved_question, next_check, notion_page_id, and journal entries.
+        for holding in SEED_HOLDINGS:
+            db.migrate_placeholder_holding(holding)
+
     if db.count_chunks() == 0:
         db.insert_chunks(SEED_CHUNKS)
+    else:
+        chunks_by_ticker: dict[str, list[dict[str, str]]] = {}
+        for chunk in SEED_CHUNKS:
+            chunks_by_ticker.setdefault(chunk["ticker"].upper(), []).append(chunk)
+        for ticker, ticker_chunks in chunks_by_ticker.items():
+            db.replace_placeholder_chunks(ticker, ticker_chunks)

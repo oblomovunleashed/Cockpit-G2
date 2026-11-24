@@ -6,6 +6,7 @@ import {
   Text_ItemEvent,
   type EvenHubEvent,
 } from '@evenrealities/even_hub_sdk';
+import { BrowserMicRecorder } from '../src/audio.ts';
 import {
   dispatchEvenHubEvent,
   executeTapAction,
@@ -457,4 +458,51 @@ test('earnings_preview stays in RESULT (no tap fallback) while peer_read_across 
     'Check on NVDA call whether TSMC CoWoS tightness affects margins',
   ]);
   assert.equal(state.mode, 'CONFIRM_WRITE');
+});
+
+test('releasing mic button while getUserMedia permission is pending cancels capture and stops late stream', async () => {
+  let resolveStream!: (stream: MediaStream) => void;
+  const pendingStream = new Promise<MediaStream>((resolve) => {
+    resolveStream = resolve;
+  });
+
+  let trackStops = 0;
+  let audioContextCreated = false;
+
+  const mic = new BrowserMicRecorder({
+    getUserMedia: () => pendingStream,
+    createAudioContext: () => {
+      audioContextCreated = true;
+      throw new Error('AudioContext should not be created after cancellation');
+    },
+  });
+
+  const startPromise = mic.start();
+  assert.equal(mic.isStarting, true);
+  assert.equal(mic.isActive, true);
+  assert.equal(mic.isRecording, false);
+
+  // User releases button before permission prompt finishes
+  const stopResult = await mic.stop();
+  assert.equal(stopResult, null);
+  assert.equal(mic.isActive, false);
+
+  // Permission is subsequently granted -> late stream must be stopped immediately
+  const fakeStream = {
+    getTracks: () => [
+      {
+        stop: () => {
+          trackStops += 1;
+        },
+      },
+    ],
+  } as unknown as MediaStream;
+  resolveStream(fakeStream);
+
+  const started = await startPromise;
+  assert.equal(started, false);
+  assert.equal(trackStops, 1);
+  assert.equal(audioContextCreated, false);
+  assert.equal(mic.isRecording, false);
+  assert.equal(mic.isActive, false);
 });

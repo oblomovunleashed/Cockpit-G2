@@ -219,6 +219,83 @@ class CockpitDB:
                 return None
         return self.get_holding(ticker)
 
+    def migrate_placeholder_holding(self, replacement: HoldingRecord) -> bool:
+        """
+        Idempotently upgrades an identifiable placeholder holding record to real
+        seeded metadata/findings while preserving user-authored saved_question,
+        next_check, and notion_page_id.
+        """
+        existing = self.get_holding(replacement.ticker)
+        if existing is None:
+            return False
+
+        is_placeholder = (
+            "placeholder" in existing.company.lower()
+            or "placeholder" in existing.latest_finding.lower()
+            or "replace with real filing" in existing.source_citation.lower()
+        )
+        if not is_placeholder:
+            return False
+
+        now = utc_now_iso()
+        with self._connect() as conn:
+            conn.execute(
+                """
+                UPDATE holdings
+                SET company = ?, verdict = ?, latest_finding = ?, source_citation = ?,
+                    suggested_next_check = ?, updated_at = ?
+                WHERE UPPER(ticker) = UPPER(?)
+                """,
+                (
+                    replacement.company,
+                    replacement.verdict.value if replacement.verdict is not None else "",
+                    replacement.latest_finding,
+                    replacement.source_citation,
+                    replacement.suggested_next_check,
+                    now,
+                    replacement.ticker,
+                ),
+            )
+        return True
+
+    def replace_placeholder_chunks(self, ticker: str, new_chunks: list[dict[str, str]]) -> int:
+        """
+        Idempotently replaces identifiable placeholder document_chunks for a ticker
+        with real filing excerpts (keeping FTS5 triggers in sync).
+        """
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT id FROM document_chunks
+                WHERE UPPER(ticker) = UPPER(?)
+                  AND (
+                      LOWER(doc_title) LIKE 'placeholder%'
+                      OR LOWER(page_ref) LIKE 'placeholder%'
+                  )
+                """,
+                (ticker,),
+            ).fetchall()
+            if not rows:
+                return 0
+
+            conn.executemany(
+                "DELETE FROM document_chunks WHERE id = ?",
+                [(row["id"],) for row in rows],
+            )
+            conn.executemany(
+                """
+                INSERT INTO document_chunks (
+                    ticker, doc_title, doc_date, page_ref, topic, headline,
+                    summary_card, verdict, suggested_next_check, excerpt, source_url
+                ) VALUES (
+                    :ticker, :doc_title, :doc_date, :page_ref, :topic, :headline,
+                    :summary_card, :verdict, :suggested_next_check, :excerpt, :source_url
+                )
+                """,
+                new_chunks,
+            )
+        return len(new_chunks)
+
     # ------------------------------------------------------------------
     # Document chunks
     # ------------------------------------------------------------------

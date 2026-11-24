@@ -53,6 +53,11 @@ export class PcmAudioRecorder {
   }
 }
 
+export interface BrowserMicDeps {
+  getUserMedia?: (constraints: MediaStreamConstraints) => Promise<MediaStream>;
+  createAudioContext?: () => AudioContext;
+}
+
 /**
  * Browser / companion WebView push-to-talk microphone capture.
  * Resamples browser AudioContext input down to 16 kHz 16-bit LE mono PCM
@@ -66,21 +71,77 @@ export class BrowserMicRecorder {
   private pcmChunks: Uint8Array[] = [];
   private totalBytes = 0;
   private recording = false;
+  private starting = false;
+  private cancelRequested = false;
+  private sessionSeq = 0;
+  private readonly deps: BrowserMicDeps;
+
+  constructor(deps: BrowserMicDeps = {}) {
+    this.deps = deps;
+  }
 
   get isRecording(): boolean {
     return this.recording;
   }
 
-  async start(): Promise<void> {
-    if (!navigator.mediaDevices?.getUserMedia) {
-      throw new Error('Microphone capture is not supported in this browser/WebView.');
-    }
+  get isStarting(): boolean {
+    return this.starting;
+  }
+
+  /** True both while awaiting getUserMedia permission and while actively capturing. */
+  get isActive(): boolean {
+    return this.recording || this.starting;
+  }
+
+  /**
+   * Starts microphone capture. Returns `true` if capture is active, or `false` if the
+   * button was released (via `stop()`) while microphone permission was still pending.
+   */
+  async start(): Promise<boolean> {
+    const getUserMedia =
+      this.deps.getUserMedia ??
+      ((constraints: MediaStreamConstraints) => {
+        if (!navigator.mediaDevices?.getUserMedia) {
+          return Promise.reject(
+            new Error('Microphone capture is not supported in this browser/WebView.'),
+          );
+        }
+        return navigator.mediaDevices.getUserMedia(constraints);
+      });
+
+    const token = ++this.sessionSeq;
+    this.starting = true;
+    this.cancelRequested = false;
     this.pcmChunks = [];
     this.totalBytes = 0;
-    this.stream = await navigator.mediaDevices.getUserMedia({
-      audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true },
-    });
-    this.ctx = new AudioContext();
+
+    let stream: MediaStream;
+    try {
+      stream = await getUserMedia({
+        audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true },
+      });
+    } catch (err) {
+      if (token === this.sessionSeq) {
+        this.starting = false;
+        this.cancelRequested = false;
+      }
+      throw err;
+    }
+
+    // Button was released (or another session superseded) while permission was pending:
+    // immediately close the late-arriving stream so the mic does not stay active.
+    if (this.cancelRequested || token !== this.sessionSeq) {
+      stream.getTracks().forEach((t) => t.stop());
+      if (token === this.sessionSeq) {
+        this.starting = false;
+        this.cancelRequested = false;
+      }
+      return false;
+    }
+
+    const createCtx = this.deps.createAudioContext ?? (() => new AudioContext());
+    this.stream = stream;
+    this.ctx = createCtx();
     this.source = this.ctx.createMediaStreamSource(this.stream);
     this.processor = this.ctx.createScriptProcessor(4096, 1, 1);
 
@@ -97,11 +158,22 @@ export class BrowserMicRecorder {
 
     this.source.connect(this.processor);
     this.processor.connect(this.ctx.destination);
+    this.starting = false;
     this.recording = true;
+    return true;
   }
 
   async stop(): Promise<Blob | null> {
+    this.cancelRequested = true;
+    this.sessionSeq += 1;
+
+    if (!this.recording) {
+      this.starting = false;
+      return null;
+    }
+
     this.recording = false;
+    this.starting = false;
     this.processor?.disconnect();
     this.source?.disconnect();
     this.stream?.getTracks().forEach((t) => t.stop());

@@ -3,6 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <link rel="icon" type="image/svg+xml" href="./favicon.svg" />
     <title>Cockpit · Even G2 Companion</title>
     <style>
       :root {
@@ -153,7 +154,10 @@
   <body>
     <div class="shell">
       <div class="bar">
-        <span class="title">COCKPIT · EVEN G2</span>
+        <span class="title" style="display:inline-flex;align-items:center;gap:8px;">
+          <img src="./favicon.svg" alt="" width="20" height="20" style="image-rendering:pixelated;border-radius:3px;" />
+          COCKPIT · EVEN G2
+        </span>
         <div class="row">
           <span id="bridge-status" class="pill">Bridge: connecting...</span>
           <span id="backend-status" class="pill">Backend: checking...</span>

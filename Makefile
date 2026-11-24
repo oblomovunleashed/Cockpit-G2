@@ -1,4 +1,4 @@
-.PHONY: setup setup-backend setup-glasses backend glasses sim test typecheck build pack
+.PHONY: setup setup-backend setup-glasses setup-notion smoke-live backend glasses sim test typecheck build pack
 
 setup: setup-backend setup-glasses
 
@@ -9,6 +9,12 @@ setup-backend:
 
 setup-glasses:
 	cd glasses && npm install
+
+setup-notion:
+	PYTHONPATH=backend backend/.venv/bin/python -m app.scripts.setup_notion --write-env
+
+smoke-live:
+	PYTHONPATH=backend backend/.venv/bin/python -m app.scripts.smoke_live
 
 backend:
 	PYTHONPATH=backend backend/.venv/bin/uvicorn app.main:app --reload --host 127.0.0.1 --port 8000

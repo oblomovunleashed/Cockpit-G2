@@ -5,7 +5,7 @@ import {
   type EvenHubEvent,
 } from '@evenrealities/even_hub_sdk';
 import { CockpitApiClient } from './api';
-import { PcmAudioRecorder } from './audio';
+import { BrowserMicRecorder, PcmAudioRecorder } from './audio';
 import {
   G2HudRenderer,
   MENU_ITEM_NEXT_HOLDING,
@@ -21,7 +21,12 @@ const NVDA_REVENUE_Q = "Is revenue running ahead of management's guidance?";
 
 const api = new CockpitApiClient();
 const recorder = new PcmAudioRecorder();
+const browserMic = new BrowserMicRecorder();
 const state: CockpitState = createInitialState();
+
+function isAnyMicRecording(): boolean {
+  return recorder.isRecording || browserMic.isRecording;
+}
 
 let bridge: EvenAppBridge | null = null;
 let hud: G2HudRenderer;
@@ -106,7 +111,7 @@ async function showCard(card: HudCard): Promise<void> {
 }
 
 async function submitTextUtterance(transcript: string): Promise<void> {
-  if (state.mode === 'PROCESSING' || recorder.isRecording) return;
+  if (state.mode === 'PROCESSING' || isAnyMicRecording()) return;
   const clean = transcript.trim();
   if (!clean) return;
 
@@ -147,7 +152,7 @@ async function submitTextUtterance(transcript: string): Promise<void> {
 
 async function handleTapAction(): Promise<void> {
   await executeTapAction(state, {
-    isRecording: () => recorder.isRecording,
+    isRecording: () => isAnyMicRecording(),
     getActiveHolding: activeHolding,
     confirmWrite: (pendingId) => api.confirmWrite(pendingId),
     stageCheck: (draft) => api.stageCheck(draft),
@@ -158,7 +163,7 @@ async function handleTapAction(): Promise<void> {
 }
 
 async function handleSwipe(delta: number): Promise<void> {
-  if (state.mode === 'PROCESSING' || recorder.isRecording) return;
+  if (state.mode === 'PROCESSING' || isAnyMicRecording()) return;
 
   if (state.pendingWrite) {
     const pendingId = state.pendingWrite.id;
@@ -201,7 +206,7 @@ async function handleDoubleTap(): Promise<void> {
 }
 
 async function startVoiceCapture(): Promise<void> {
-  if (state.mode === 'PROCESSING' || recorder.isRecording) return;
+  if (state.mode === 'PROCESSING' || isAnyMicRecording()) return;
   state.mode = 'LISTENING';
   await showCard({
     header: 'COCKPIT · ● LISTENING',
@@ -211,9 +216,7 @@ async function startVoiceCapture(): Promise<void> {
   await recorder.start(bridge, AudioInputSource.Glasses);
 }
 
-async function stopVoiceCaptureAndRoute(): Promise<void> {
-  if (!recorder.isRecording) return;
-  const wavBlob = await recorder.stop(bridge);
+async function routeWavBlob(wavBlob: Blob | null): Promise<void> {
   if (!wavBlob) {
     state.mode = 'BRIEFING';
     await showCard(holdingToCard(state));
@@ -253,6 +256,38 @@ async function stopVoiceCaptureAndRoute(): Promise<void> {
   }
 }
 
+async function stopVoiceCaptureAndRoute(): Promise<void> {
+  if (!recorder.isRecording) return;
+  const wavBlob = await recorder.stop(bridge);
+  await routeWavBlob(wavBlob);
+}
+
+async function startBrowserMicCapture(): Promise<void> {
+  if (state.mode === 'PROCESSING' || isAnyMicRecording()) return;
+  try {
+    await browserMic.start();
+    state.mode = 'LISTENING';
+    await showCard({
+      header: 'COCKPIT · ● LISTENING (MIC)',
+      body: 'Speak a note, task, or earnings question.\nRelease button when finished.',
+      footer: 'Release to transcribe via OpenRouter',
+    });
+  } catch (err) {
+    state.mode = 'BRIEFING';
+    await showCard({
+      header: 'COCKPIT · MIC ERROR',
+      body: err instanceof Error ? err.message : 'Could not open microphone.',
+      footer: 'Check macOS/browser mic permission',
+    });
+  }
+}
+
+async function stopBrowserMicAndRoute(): Promise<void> {
+  if (!browserMic.isRecording) return;
+  const wavBlob = await browserMic.stop();
+  await routeWavBlob(wavBlob);
+}
+
 function handleEvenHubEvent(event: EvenHubEvent): void {
   dispatchEvenHubEvent(event, {
     onAudioPcm: (pcm) => recorder.pushChunk(pcm),
@@ -280,6 +315,25 @@ function wireCompanionControls(): void {
       const text = btn.dataset.utterance ?? '';
       void submitTextUtterance(text);
     });
+  });
+
+  const micBtn = document.getElementById('btn-mic');
+  micBtn?.addEventListener('pointerdown', (e) => {
+    e.preventDefault();
+    void startBrowserMicCapture();
+  });
+  micBtn?.addEventListener('pointerup', () => {
+    void stopBrowserMicAndRoute();
+  });
+  micBtn?.addEventListener('pointerleave', () => {
+    if (browserMic.isRecording) {
+      void stopBrowserMicAndRoute();
+    }
+  });
+  micBtn?.addEventListener('pointercancel', () => {
+    if (browserMic.isRecording) {
+      void stopBrowserMicAndRoute();
+    }
   });
 
   document.getElementById('btn-tap')?.addEventListener('click', () => {

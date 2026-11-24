@@ -1,11 +1,37 @@
 from __future__ import annotations
 
 import re
+import time
 import httpx
 
 from app.config import Settings
 from app.models import ActionType, DocumentChunk, JevDecision, Mind, Verdict
 from app.services.retrieval import extract_content_tokens
+
+
+def _extract_noul_probability(answer: dict | None, default: float) -> float:
+    """OpenRouter Decisions API returns `probability` for noul questions (legacy: `noul`)."""
+    if not isinstance(answer, dict):
+        return default
+    raw = answer.get("probability")
+    if raw is None:
+        raw = answer.get("noul")
+    if raw is None:
+        return default
+    try:
+        return min(max(float(raw), 0.0), 1.0)
+    except (TypeError, ValueError):
+        return default
+
+
+def _parse_enum(enum_cls, raw: object, default):
+    if raw is None:
+        return default
+    val = str(raw).strip()
+    for member in enum_cls:
+        if member.value.lower() == val.lower():
+            return member
+    return default
 
 
 class JevRouter:
@@ -84,25 +110,30 @@ class JevRouter:
             },
         }
 
-        answers = await self._call_jev(payload)
+        response_data, latency_ms = await self._call_jev(payload)
+        answers = response_data.get("answers", {})
+        resolved_model = str(response_data.get("model") or self.settings.openrouter_jev_model)
+        cost = response_data.get("usage", {}).get("cost")
+
         mind_ans = answers.get("mind", {})
         action_ans = answers.get("action", {})
         holding_ans = answers.get("holding", {})
         worker_ans = answers.get("needs_llm_worker", {})
 
-        mind = Mind(mind_ans.get("choice", Mind.WORK.value))
-        action = ActionType(action_ans.get("choice", ActionType.LOG_NOTE.value))
-        raw_holding = holding_ans.get("choice", "none")
-        holding = None if raw_holding == "none" else raw_holding
+        mind = _parse_enum(Mind, mind_ans.get("choice"), Mind.INTERESTS)
+        action = _parse_enum(ActionType, action_ans.get("choice"), ActionType.LOG_NOTE)
+        raw_holding = str(holding_ans.get("choice", "none")).strip()
+        holding = None if raw_holding.lower() == "none" else raw_holding.upper()
         if holding is None and mind == Mind.WORK and active_ticker:
-            holding = active_ticker
+            holding = active_ticker.upper()
 
-        worker_prob = float(worker_ans.get("noul", 0.0))
+        worker_prob = _extract_noul_probability(worker_ans, 0.0)
         needs_worker = (
             action in (ActionType.BRIEF_HOLDING, ActionType.FOLLOW_UP_SOURCE)
-            or worker_prob >= 0.55
+            or (mind == Mind.WORK and worker_prob >= 0.55 and action != ActionType.DRAFT_NEXT_CHECK)
         )
         confidence = float(action_ans.get("confidence", mind_ans.get("confidence", 0.9)))
+        cost_part = f", ${float(cost):.6f}" if isinstance(cost, (int, float)) else ""
 
         return JevDecision(
             mind=mind,
@@ -111,7 +142,7 @@ class JevRouter:
             needs_llm_worker=needs_worker,
             confidence=min(max(confidence, 0.0), 1.0),
             mode="openrouter",
-            reasoning=f"Jev OpenRouter ({self.settings.openrouter_jev_model}), worker_p={worker_prob:.2f}",
+            reasoning=f"Jev ({resolved_model}, {latency_ms}ms, worker_p={worker_prob:.2f}{cost_part})",
         )
 
     async def select_best_chunk(
@@ -165,32 +196,38 @@ class JevRouter:
                 },
             },
         }
-        answers = await self._call_jev(payload)
-        is_answered_p = float(answers.get("is_answered", {}).get("noul", 1.0))
-        chosen_key = answers.get("best_chunk", {}).get("choice", "none")
+        response_data, _latency_ms = await self._call_jev(payload)
+        answers = response_data.get("answers", {})
+        is_answered_p = _extract_noul_probability(answers.get("is_answered"), 1.0)
+        chosen_key = str(answers.get("best_chunk", {}).get("choice", "none")).strip()
         confidence = float(answers.get("best_chunk", {}).get("confidence", 0.0))
 
-        if chosen_key == "none" or is_answered_p < 0.5:
+        if chosen_key.lower() == "none" or is_answered_p < 0.5:
             return None
 
         chosen = next((c for c in candidates if f"chunk_{c.id}" == chosen_key), None)
         if chosen is None:
             return None
-        verdict_str = answers.get("verdict", {}).get("choice", chosen.verdict.value)
-        return chosen, Verdict(verdict_str), confidence
+        verdict = _parse_enum(Verdict, answers.get("verdict", {}).get("choice"), chosen.verdict)
+        return chosen, verdict, confidence
 
-    async def _call_jev(self, payload: dict) -> dict:
+    async def _call_jev(self, payload: dict) -> tuple[dict, int]:
         url = f"{self.settings.openrouter_base_url.rstrip('/')}/alpha/decisions"
         headers = {
             "Authorization": f"Bearer {self.settings.openrouter_api_key}",
             "Content-Type": "application/json",
             "X-OpenRouter-Title": "Cockpit-G2",
         }
+        t0 = time.perf_counter()
         async with httpx.AsyncClient(timeout=15.0) as client:
             resp = await client.post(url, headers=headers, json=payload)
-            resp.raise_for_status()
+            if resp.is_error:
+                raise RuntimeError(
+                    f"OpenRouter Jev API error {resp.status_code}: {resp.text[:300]}"
+                )
             data = resp.json()
-        return data.get("answers", {})
+        elapsed_ms = int((time.perf_counter() - t0) * 1000)
+        return data, elapsed_ms
 
     # ------------------------------------------------------------------
     # Deterministic local fallback (mock mode / offline tests)

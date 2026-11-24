@@ -25,8 +25,8 @@ class Settings(BaseSettings):
     openrouter_api_key: str = ""
     openrouter_base_url: str = "https://openrouter.ai/api"
     openrouter_jev_model: str = "~typesafe/jev-latest"
-    openrouter_stt_model: str = "openai/whisper-1"
-    openrouter_llm_model: str = "anthropic/claude-haiku-4.5"
+    openrouter_stt_model: str = "openai/whisper-large-v3-turbo"
+    openrouter_llm_model: str = "deepseek/deepseek-v4.1-flash-1017"
 
     # Notion (optional live sync for Track 4)
     notion_token: str = ""

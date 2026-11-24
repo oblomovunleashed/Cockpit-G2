@@ -1,0 +1,22 @@
+{
+  "package_id": "com.oblomovunleashed.cockpit",
+  "edition": "202601",
+  "name": "Cockpit",
+  "version": "0.1.0",
+  "min_app_version": "2.2.10",
+  "min_sdk_version": "0.0.16",
+  "entrypoint": "index.html",
+  "permissions": [
+    {
+      "name": "network",
+      "desc": "Communicates with the local Cockpit FastAPI service for speech transcription, Jev routing, document retrieval, and confirmed Notion writes.",
+      "whitelist": [
+        "http://localhost:8000",
+        "http://127.0.0.1:8000"
+      ]
+    }
+  ],
+  "supported_languages": [
+    "en"
+  ]
+}

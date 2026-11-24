@@ -12,6 +12,16 @@ NVDA_Q3_PR_URL = (
     "https://investor.nvidia.com/news/press-release-details/2026/"
     "NVIDIA-Announces-Financial-Results-for-Third-Quarter-Fiscal-2027/default.aspx"
 )
+TSM_Q3_PR_URL = "https://investor.tsmc.com/english/quarterly-results/2026/q3"
+MSFT_Q1_PR_URL = "https://www.microsoft.com/en-us/Investor/earnings/FY-2027-Q1/press-release-webcast"
+
+
+# Verified prior-quarter guidance baselines for deterministic (zero-LLM) earnings_preview skill
+PRIOR_BASELINES: dict[str, str] = {
+    "NVDA": "Aug call baseline: Q3 rev guide $108bn; Q4 GM trough 71-72%; Q1 FY28 price hikes.",
+    "TSM": "Q3 2026 baseline: Q4 rev guide $52.3-54.3bn; Q4 GM 65.0-67.0%; FY26 capex $60-64bn.",
+    "MSFT": "Q1 FY27 baseline: Q2 Azure guide 49-50% CC; Q2 capex >$50bn (CY26 ~$170bn).",
+}
 
 
 SEED_HOLDINGS: list[HoldingRecord] = [
@@ -29,33 +39,36 @@ SEED_HOLDINGS: list[HoldingRecord] = [
         next_check="",
     ),
     HoldingRecord(
-        ticker="MSFT",
-        company="Microsoft Corp. (placeholder slot — swap real filings)",
-        saved_question="Is Azure AI capacity growth re-accelerating in the second half?",
-        verdict=Verdict.WATCH,
+        ticker="TSM",
+        company="TSMC",
+        saved_question="Is the N2 ramp diluting gross margin below guidance?",
+        verdict=Verdict.HELD,
         latest_finding=(
-            "Seed placeholder ready for real MSFT issuer release/transcript ingestion."
+            "Q3 2026 gross margin · 66.4% (vs 67.7% Q2) on N2 ramp (8% of wafers). "
+            "Q4 GM guided 65.0-67.0%."
         ),
-        source_citation="Replace with real filing excerpt",
-        suggested_next_check="Check Azure capacity ramp cadence next quarter",
+        source_citation="TSMC Q3 2026 PR · Oct 15",
+        suggested_next_check="Check N2 margin dilution as N2 scales past 8% of wafer revenue",
         next_check="",
     ),
     HoldingRecord(
-        ticker="TSM",
-        company="TSMC (placeholder slot — swap real filings)",
-        saved_question="Is N2 wafer demand supporting full-year gross margin guidance?",
+        ticker="MSFT",
+        company="Microsoft Corp.",
+        saved_question="Is Azure AI capacity growth accelerating despite delivery delays?",
         verdict=Verdict.AHEAD,
         latest_finding=(
-            "Seed placeholder ready for real TSMC issuer release/transcript ingestion."
+            "Q1 FY27 Azure grew 48% YoY (vs 44-45% guide); Q2 guided 49-50% CC "
+            "as AI demand outstrips supply."
         ),
-        source_citation="Replace with real filing excerpt",
-        suggested_next_check="Check N2 utilization and overseas fab dilution next call",
+        source_citation="MSFT Q1 FY27 PR · Oct 28",
+        suggested_next_check="Check whether Q2 capex exceeds $50bn as delayed racks arrive",
         next_check="",
     ),
 ]
 
 
 SEED_CHUNKS: list[dict[str, str]] = [
+    # NVIDIA — Q2 FY27 Call (Aug 26, 2026) & Q3 FY27 Release (Nov 17, 2026)
     {
         "ticker": "NVDA",
         "doc_title": "NVIDIA Q3 FY27 Earnings Release",
@@ -115,41 +128,89 @@ SEED_CHUNKS: list[dict[str, str]] = [
         ),
         "source_url": f"{NVDA_Q2_CALL_URL}#page=7",
     },
+    # TSMC — Q3 2026 Earnings Release & Call (Oct 15, 2026)
     {
-        "ticker": "MSFT",
-        "doc_title": "Placeholder Issuer Filing Slot (MSFT)",
-        "doc_date": "2026-11-01",
-        "page_ref": "Placeholder · Replace with real filing",
-        "topic": "azure cloud ai capacity capex growth second half",
-        "headline": "MSFT placeholder finding",
+        "ticker": "TSM",
+        "doc_title": "TSMC Q3 2026 Earnings Release",
+        "doc_date": "2026-10-15",
+        "page_ref": "TSMC Q3 2026 PR · Oct 15",
+        "topic": "N2 2nm ramp gross margin dilution guidance Q4 wafer",
+        "headline": "Q3 gross margin 66.4%; Q4 guided 65.0-67.0%",
         "summary_card": (
-            "Placeholder MSFT card: swap in real primary filing excerpts during build week."
+            "Q3 2026 gross margin · 66.4% (vs 67.7% Q2) on N2 ramp (8% of wafers). "
+            "Q4 GM guided 65.0-67.0%."
         ),
-        "verdict": Verdict.WATCH.value,
-        "suggested_next_check": "Verify Azure AI capacity online dates in next release",
+        "verdict": Verdict.HELD.value,
+        "suggested_next_check": "Check N2 margin dilution as N2 scales past 8% of wafer revenue",
         "excerpt": (
-            "Placeholder passage for Holding 2 (MSFT). Replace with verified real issuer "
-            "release and transcript chunks before recording the demo."
+            "TSMC reported Q3 2026 gross margin of 66.4%, down modestly from 67.7% in Q2 "
+            "due to initial high-volume N2 (2nm) ramp dilution as N2 reached 8% of wafer revenue. "
+            "Management guided Q4 2026 gross margin to 65.0%-67.0%."
         ),
-        "source_url": "",
+        "source_url": TSM_Q3_PR_URL,
     },
     {
         "ticker": "TSM",
-        "doc_title": "Placeholder Issuer Filing Slot (TSM)",
-        "doc_date": "2026-11-01",
-        "page_ref": "Placeholder · Replace with real filing",
-        "topic": "n2 wafer demand gross margin overseas fab dilution",
-        "headline": "TSM placeholder finding",
+        "doc_title": "TSMC Q3 2026 Earnings Release & Call",
+        "doc_date": "2026-10-15",
+        "page_ref": "TSMC Q3 2026 Call · Oct 15",
+        "topic": "AI HPC CoWoS packaging capacity demand supply revenue guidance capex accelerators",
+        "headline": "Q3 rev $46.72bn (+41% YoY); Q4 guide $52.3-54.3bn; CoWoS maxed",
         "summary_card": (
-            "Placeholder TSM card: swap in real primary filing excerpts during build week."
+            "Q3 rev $46.72bn (+41% YoY); Q4 guided $52.3-54.3bn. "
+            "AI/CoWoS demand still far outpaces supply ($60-64bn FY26 capex)."
         ),
         "verdict": Verdict.AHEAD.value,
-        "suggested_next_check": "Verify N2 ramp margin impact on next earnings call",
+        "suggested_next_check": "Track CoWoS packaging bottlenecks and N3/N2 wafer pricing into 2027",
         "excerpt": (
-            "Placeholder passage for Holding 3 (TSM). Replace with verified real issuer "
-            "release and transcript chunks before recording the demo."
+            "TSMC posted Q3 2026 revenue of $46.72 billion (+41.2% YoY), with HPC/AI accelerators "
+            "at 68% of net revenue, and guided Q4 revenue to $52.3-$54.3 billion (~58% YoY). "
+            "Chairman C.C. Wei reiterated AI demand dramatically outpaces CoWoS advanced packaging "
+            "and leading-edge wafer supply, backed by $60-$64 billion in FY26 capex."
         ),
-        "source_url": "",
+        "source_url": TSM_Q3_PR_URL,
+    },
+    # Microsoft — Q1 FY27 Earnings Release & Call (Oct 28, 2026)
+    {
+        "ticker": "MSFT",
+        "doc_title": "Microsoft Q1 FY27 Earnings Release",
+        "doc_date": "2026-10-28",
+        "page_ref": "MSFT Q1 FY27 PR · Oct 28",
+        "topic": "Azure cloud AI capacity growth acceleration guidance constant currency",
+        "headline": "Q1 FY27 Azure +48% YoY; Q2 guided 49-50% CC",
+        "summary_card": (
+            "Q1 FY27 Azure grew 48% YoY (vs 44-45% guide); Q2 guided 49-50% CC "
+            "as AI demand outstrips supply."
+        ),
+        "verdict": Verdict.AHEAD.value,
+        "suggested_next_check": "Check whether Azure sustains 49-50% growth as new racks come online",
+        "excerpt": (
+            "Microsoft Q1 FY27 revenue reached $92.3 billion (+19% YoY). Azure and cloud services "
+            "grew 48% YoY to $33.17 billion, beating prior 44%-45% guidance, with Q2 FY27 Azure "
+            "growth guided to accelerate further to 49%-50% in constant currency as AI demand exceeds supply."
+        ),
+        "source_url": MSFT_Q1_PR_URL,
+    },
+    {
+        "ticker": "MSFT",
+        "doc_title": "Microsoft Q1 FY27 Earnings Call",
+        "doc_date": "2026-10-28",
+        "page_ref": "MSFT Q1 FY27 Call · Oct 28",
+        "topic": "capex capital expenditure GPU GB300 racks delivery delays infrastructure spending",
+        "headline": "Q1 capex $45.2bn on delivery slips; Q2 guided >$50bn",
+        "summary_card": (
+            "Q1 FY27 capex $45.2bn (slipped deliveries, not demand); "
+            "Q2 guided >$50bn with faster GB300 rack dock-to-live."
+        ),
+        "verdict": Verdict.WATCH.value,
+        "suggested_next_check": "Check whether Q2 capex exceeds $50bn and GB300 rack deliveries catch up",
+        "excerpt": (
+            "Q1 FY27 capital expenditures totaled $45.2 billion, below ~$50.6 billion consensus due to "
+            "slipped third-party capacity deliveries rather than demand softness. CFO Amy Hood guided "
+            "Q2 capex above $50 billion (targeting ~$170 billion in CY26) and highlighted faster "
+            "dock-to-live deployment for GB300 GPU racks alongside Maia/Cobalt silicon."
+        ),
+        "source_url": MSFT_Q1_PR_URL,
     },
 ]
 
@@ -159,5 +220,17 @@ def seed_if_empty(db: CockpitDB) -> None:
         now = utc_now_iso()
         for holding in SEED_HOLDINGS:
             db.upsert_holding(holding.model_copy(update={"updated_at": now}))
+    else:
+        # Idempotently migrate any legacy placeholder holdings from earlier versions
+        # while preserving saved_question, next_check, notion_page_id, and journal entries.
+        for holding in SEED_HOLDINGS:
+            db.migrate_placeholder_holding(holding)
+
     if db.count_chunks() == 0:
         db.insert_chunks(SEED_CHUNKS)
+    else:
+        chunks_by_ticker: dict[str, list[dict[str, str]]] = {}
+        for chunk in SEED_CHUNKS:
+            chunks_by_ticker.setdefault(chunk["ticker"].upper(), []).append(chunk)
+        for ticker, ticker_chunks in chunks_by_ticker.items():
+            db.replace_placeholder_chunks(ticker, ticker_chunks)

@@ -3,8 +3,10 @@ export type Mind = 'work' | 'personal' | 'interests';
 export type ActionType =
   | 'log_note'
   | 'log_task'
+  | 'earnings_preview'
   | 'brief_holding'
   | 'follow_up_source'
+  | 'peer_read_across'
   | 'draft_next_check'
   | 'clarify';
 
@@ -20,6 +22,7 @@ export interface JevDecision {
   mind: Mind;
   action: ActionType;
   holding: string | null;
+  peer_holding: string | null;
   needs_llm_worker: boolean;
   confidence: number;
   mode: 'openrouter' | 'mock';

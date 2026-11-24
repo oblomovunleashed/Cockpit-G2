@@ -1,11 +1,37 @@
 from __future__ import annotations
 
 import re
+import time
 import httpx
 
 from app.config import Settings
 from app.models import ActionType, DocumentChunk, JevDecision, Mind, Verdict
 from app.services.retrieval import extract_content_tokens
+
+
+def _extract_noul_probability(answer: dict | None, default: float) -> float:
+    """OpenRouter Decisions API returns `probability` for noul questions (legacy: `noul`)."""
+    if not isinstance(answer, dict):
+        return default
+    raw = answer.get("probability")
+    if raw is None:
+        raw = answer.get("noul")
+    if raw is None:
+        return default
+    try:
+        return min(max(float(raw), 0.0), 1.0)
+    except (TypeError, ValueError):
+        return default
+
+
+def _parse_enum(enum_cls, raw: object, default):
+    if raw is None:
+        return default
+    val = str(raw).strip()
+    for member in enum_cls:
+        if member.value.lower() == val.lower():
+            return member
+    return default
 
 
 class JevRouter:
@@ -59,59 +85,107 @@ class JevRouter:
                 },
                 "action": {
                     "type": "choice",
-                    "instructions": "What action should Cockpit take?",
+                    "instructions": "Which Cockpit skill or action should handle this utterance?",
                     "criteria": {
-                        "log_note": "Save a short personal/interests reflection or takeaway without calling an LLM.",
-                        "log_task": "Save a short reminder or to-do task without calling an LLM.",
-                        "brief_holding": "Open or review an earnings summary card for a portfolio holding.",
-                        "follow_up_source": "Ask a factual follow-up question against an earnings release or call transcript.",
-                        "draft_next_check": "Record a watch item / question to check at the next earnings call.",
+                        "log_note": "Save a short personal or interests reflection, podcast/book reaction, or general thought without calling an LLM.",
+                        "log_task": "Save a short personal reminder, errand, gift, or to-do task without calling an LLM.",
+                        "earnings_preview": "Pre-earnings setup or checklist BEFORE a print: show what the wearer is watching, saved question, and prior guidance baseline (e.g. 'preview NVIDIA earnings', 'what am I watching on TSMC?'). Does NOT need an LLM.",
+                        "brief_holding": "Post-earnings thesis review for a single holding: open or refresh the earnings delta card (e.g. 'review NVIDIA earnings', 'what changed?'), NOT a pre-earnings preview or cross-company read-across.",
+                        "follow_up_source": "Ask a specific factual follow-up question about one company's metric, driver, margin recovery, management comment, or outlook.",
+                        "peer_read_across": "Cross-company read-across comparing one company's filing/results against another holding's thesis (e.g. 'read-across from TSMC to NVIDIA', 'what does Microsoft capex mean for NVIDIA?').",
+                        "draft_next_check": "Explicitly dictate a watch item or question to check at the next earnings call or next quarter.",
                         "clarify": "The utterance is genuinely ambiguous and needs a quick tap clarification.",
                     },
                 },
                 "holding": {
                     "type": "choice",
-                    "instructions": "Which portfolio ticker is this utterance about?",
+                    "instructions": (
+                        "Which primary/target portfolio ticker is this utterance about? "
+                        "For peer read-across (e.g. 'from TSMC to NVIDIA'), pick the TARGET ticker (NVIDIA)."
+                    ),
+                    "criteria": ticker_criteria,
+                },
+                "peer_holding": {
+                    "type": "choice",
+                    "instructions": (
+                        "Only for cross-company peer read-across: which PEER/SOURCE ticker is being read from "
+                        "(e.g. in 'read-across from TSMC to NVIDIA', pick TSM)? Otherwise pick 'none'."
+                    ),
                     "criteria": ticker_criteria,
                 },
                 "needs_llm_worker": {
                     "type": "noul",
                     "instructions": (
-                        "Does this request require retrieving issuer documents and running "
-                        "the Work LLM worker (true), or can it be logged immediately without an LLM (false)?"
+                        "Does this request require running the System-2 LLM synthesis worker (true for thesis review, "
+                        "source follow-up, or peer read-across), or can deterministic code handle it with zero LLM "
+                        "(false for fast logs, drafts, and pre-earnings previews)?"
                     ),
                 },
             },
         }
 
-        answers = await self._call_jev(payload)
+        response_data, latency_ms = await self._call_jev(payload)
+        answers = response_data.get("answers", {})
+        resolved_model = str(response_data.get("model") or self.settings.openrouter_jev_model)
+        cost = response_data.get("usage", {}).get("cost")
+
         mind_ans = answers.get("mind", {})
         action_ans = answers.get("action", {})
         holding_ans = answers.get("holding", {})
+        peer_ans = answers.get("peer_holding", {})
         worker_ans = answers.get("needs_llm_worker", {})
 
-        mind = Mind(mind_ans.get("choice", Mind.WORK.value))
-        action = ActionType(action_ans.get("choice", ActionType.LOG_NOTE.value))
-        raw_holding = holding_ans.get("choice", "none")
-        holding = None if raw_holding == "none" else raw_holding
-        if holding is None and mind == Mind.WORK and active_ticker:
-            holding = active_ticker
+        mind = _parse_enum(Mind, mind_ans.get("choice"), Mind.INTERESTS)
+        action = _parse_enum(ActionType, action_ans.get("choice"), ActionType.LOG_NOTE)
+        raw_holding = str(holding_ans.get("choice", "none")).strip()
+        holding = None if raw_holding.lower() == "none" else raw_holding.upper()
+        raw_peer = str(peer_ans.get("choice", "none")).strip()
+        peer_holding = None if raw_peer.lower() == "none" else raw_peer.upper()
 
-        worker_prob = float(worker_ans.get("noul", 0.0))
+        if mind != Mind.WORK:
+            holding = None
+            peer_holding = None
+        else:
+            if holding is None and active_ticker:
+                holding = active_ticker.upper()
+            if action != ActionType.PEER_READ_ACROSS:
+                peer_holding = None
+            elif peer_holding == holding:
+                # If user asked "read-across from TSMC" while viewing NVDA, disambiguate target vs peer
+                if active_ticker and active_ticker.upper() != holding:
+                    peer_holding = holding
+                    holding = active_ticker.upper()
+                else:
+                    peer_holding = None
+
+        worker_prob = _extract_noul_probability(worker_ans, 0.0)
+        no_llm_actions = (
+            ActionType.LOG_NOTE,
+            ActionType.LOG_TASK,
+            ActionType.DRAFT_NEXT_CHECK,
+            ActionType.EARNINGS_PREVIEW,
+        )
+        llm_actions = (
+            ActionType.BRIEF_HOLDING,
+            ActionType.FOLLOW_UP_SOURCE,
+            ActionType.PEER_READ_ACROSS,
+        )
         needs_worker = (
-            action in (ActionType.BRIEF_HOLDING, ActionType.FOLLOW_UP_SOURCE)
-            or worker_prob >= 0.55
+            action in llm_actions
+            or (mind == Mind.WORK and worker_prob >= 0.55 and action not in no_llm_actions)
         )
         confidence = float(action_ans.get("confidence", mind_ans.get("confidence", 0.9)))
+        cost_part = f", ${float(cost):.6f}" if isinstance(cost, (int, float)) else ""
 
         return JevDecision(
             mind=mind,
             action=action,
             holding=holding,
+            peer_holding=peer_holding,
             needs_llm_worker=needs_worker,
             confidence=min(max(confidence, 0.0), 1.0),
             mode="openrouter",
-            reasoning=f"Jev OpenRouter ({self.settings.openrouter_jev_model}), worker_p={worker_prob:.2f}",
+            reasoning=f"Jev ({resolved_model}, {latency_ms}ms, worker_p={worker_prob:.2f}{cost_part})",
         )
 
     async def select_best_chunk(
@@ -129,85 +203,111 @@ class JevRouter:
         if not self.settings.live_openrouter_enabled:
             return self._mock_select_chunk(question, candidates)
 
+        passages_block = "\n".join(
+            f"- chunk_{c.id} [{c.page_ref}] {c.headline}: {c.excerpt}"
+            for c in candidates
+        )
         criteria = {
-            f"chunk_{c.id}": f"[{c.page_ref}] {c.headline}: {c.excerpt}"
+            f"chunk_{c.id}": f"Passage chunk_{c.id} ({c.headline}) directly answers the wearer's question."
             for c in candidates
         }
         criteria["none"] = "None of the candidate passages actually answer the wearer's question."
 
         payload = {
             "model": self.settings.openrouter_jev_model,
-            "state": f"Wearer's question: {question}",
+            "state": (
+                f"Wearer's question: {question}\n\n"
+                f"Candidate source passages:\n{passages_block}"
+            ),
             "questions": {
                 "is_answered": {
                     "type": "noul",
                     "instructions": (
-                        "Do any of the candidate passages actually contain information "
-                        "that directly answers the wearer's question?"
+                        "Does at least one of the candidate source passages listed in state "
+                        "directly answer the wearer's question?"
                     ),
                 },
                 "best_chunk": {
                     "type": "choice",
                     "instructions": (
-                        "Select the single sourced passage that most directly answers the wearer's "
-                        "question, or 'none' if none of the passages address it."
+                        "Select the single chunk ID from state that most directly answers the "
+                        "wearer's question, or 'none' if no passage answers it."
                     ),
                     "criteria": criteria,
                 },
                 "verdict": {
                     "type": "choice",
-                    "instructions": "How does this finding compare against prior expectations?",
+                    "instructions": "For the matching passage in state, how does the result compare to prior expectations?",
                     "criteria": {
                         "HELD": "In line with or already flagged by prior guidance.",
                         "AHEAD": "Clearly beat prior guidance or expectations.",
-                        "WATCH": "Requires monitoring or follow-up next quarter.",
+                        "WATCH": "Explains a driver or risk that requires monitoring next quarter.",
                     },
                 },
             },
         }
-        answers = await self._call_jev(payload)
-        is_answered_p = float(answers.get("is_answered", {}).get("noul", 1.0))
-        chosen_key = answers.get("best_chunk", {}).get("choice", "none")
+        response_data, _latency_ms = await self._call_jev(payload)
+        answers = response_data.get("answers", {})
+        is_answered_p = _extract_noul_probability(answers.get("is_answered"), 1.0)
+        chosen_key = str(answers.get("best_chunk", {}).get("choice", "none")).strip()
         confidence = float(answers.get("best_chunk", {}).get("confidence", 0.0))
 
-        if chosen_key == "none" or is_answered_p < 0.5:
+        if chosen_key.lower() == "none" or is_answered_p < 0.5:
             return None
 
         chosen = next((c for c in candidates if f"chunk_{c.id}" == chosen_key), None)
         if chosen is None:
             return None
-        verdict_str = answers.get("verdict", {}).get("choice", chosen.verdict.value)
-        return chosen, Verdict(verdict_str), confidence
+        verdict = _parse_enum(Verdict, answers.get("verdict", {}).get("choice"), chosen.verdict)
+        return chosen, verdict, confidence
 
-    async def _call_jev(self, payload: dict) -> dict:
+    async def _call_jev(self, payload: dict) -> tuple[dict, int]:
         url = f"{self.settings.openrouter_base_url.rstrip('/')}/alpha/decisions"
         headers = {
             "Authorization": f"Bearer {self.settings.openrouter_api_key}",
             "Content-Type": "application/json",
             "X-OpenRouter-Title": "Cockpit-G2",
         }
+        t0 = time.perf_counter()
         async with httpx.AsyncClient(timeout=15.0) as client:
             resp = await client.post(url, headers=headers, json=payload)
-            resp.raise_for_status()
+            if resp.is_error:
+                raise RuntimeError(
+                    f"OpenRouter Jev API error {resp.status_code}: {resp.text[:300]}"
+                )
             data = resp.json()
-        return data.get("answers", {})
+        elapsed_ms = int((time.perf_counter() - t0) * 1000)
+        return data, elapsed_ms
 
     # ------------------------------------------------------------------
     # Deterministic local fallback (mock mode / offline tests)
     # ------------------------------------------------------------------
 
     @staticmethod
-    def _detect_explicit_ticker(lower: str, available_tickers: list[str]) -> str | None:
+    def _detect_explicit_tickers(lower: str, available_tickers: list[str]) -> list[str]:
+        """Returns explicitly mentioned tickers ordered by first appearance in the utterance."""
         aliases = {
             "NVDA": ("nvda", "nvidia"),
             "MSFT": ("msft", "microsoft", "azure"),
             "TSM": ("tsm", "tsmc"),
         }
+        hits: list[tuple[int, str]] = []
         for ticker in available_tickers:
             names = aliases.get(ticker.upper(), (ticker.lower(),))
-            if any(re.search(rf"\b{re.escape(name)}\b", lower) for name in names):
-                return ticker.upper()
-        return None
+            positions = [
+                m.start()
+                for name in names
+                for m in re.finditer(rf"\b{re.escape(name)}\b", lower)
+            ]
+            if positions:
+                hits.append((min(positions), ticker.upper()))
+        hits.sort(key=lambda item: item[0])
+        return [ticker for _, ticker in hits]
+
+    @classmethod
+    def _detect_explicit_ticker(cls, lower: str, available_tickers: list[str]) -> str | None:
+        found = cls._detect_explicit_tickers(lower, available_tickers)
+        return found[0] if found else None
 
     def _mock_route_utterance(
         self,
@@ -242,8 +342,41 @@ class JevRouter:
                 reasoning="Fast-path interests note detected (no LLM worker).",
             )
 
-        explicit_ticker = self._detect_explicit_ticker(lower, available_tickers)
+        explicit_tickers = self._detect_explicit_tickers(lower, available_tickers)
+        explicit_ticker = explicit_tickers[0] if explicit_tickers else None
         resolved_ticker = explicit_ticker or active_ticker or (available_tickers[0] if available_tickers else None)
+
+        # Peer read-across ("read-across from TSMC to NVIDIA", "what does Microsoft mean for NVIDIA")
+        if any(kw in lower for kw in ("read-across", "read across", "peer read", "cross-read", "cross read", "mean for")):
+            if len(explicit_tickers) >= 2:
+                peer_t, target_t = explicit_tickers[0], explicit_tickers[1]
+            elif len(explicit_tickers) == 1 and active_ticker and explicit_tickers[0] != active_ticker.upper():
+                peer_t, target_t = explicit_tickers[0], active_ticker.upper()
+            else:
+                peer_t = explicit_ticker
+                target_t = active_ticker.upper() if active_ticker else (available_tickers[0] if available_tickers else None)
+            return JevDecision(
+                mind=Mind.WORK,
+                action=ActionType.PEER_READ_ACROSS,
+                holding=target_t,
+                peer_holding=peer_t,
+                needs_llm_worker=True,
+                confidence=0.95,
+                mode="mock",
+                reasoning=f"Work peer_read_across skill ({peer_t} -> {target_t}) routes to System-2 synthesis.",
+            )
+
+        # Pre-earnings preview (Tier 0 deterministic — NO LLM worker!)
+        if any(kw in lower for kw in ("preview", "before earnings", "pre-call", "pre call", "what am i watching", "baseline")):
+            return JevDecision(
+                mind=Mind.WORK,
+                action=ActionType.EARNINGS_PREVIEW,
+                holding=resolved_ticker,
+                needs_llm_worker=False,
+                confidence=0.95,
+                mode="mock",
+                reasoning="Deterministic earnings_preview skill (zero LLM).",
+            )
 
         # Next-quarter check dictation ("At the next call, check whether those price increases are on schedule")
         if any(kw in lower for kw in ("next call", "next quarter", "check whether", "track whether", "save check", "watch item")):

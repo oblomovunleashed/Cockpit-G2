@@ -32,7 +32,8 @@ from app.services.job_runner import BackgroundJobRunner
 from app.services.llm_worker import LLMWorker
 from app.services.notion_sync import NotionSync
 from app.services.openrouter_stt import OpenRouterSTT
-from app.services.retrieval import DocumentRetriever
+from app.services.retrieval import DocumentRetriever, extract_content_tokens
+from app.services.work_skills import render_earnings_preview
 
 
 NO_MATCH_FINDING = "No matching passage in indexed filings for this question."
@@ -276,6 +277,150 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 holding=holding,
                 pending_write=pending,
                 suggested_check=None,
+            )
+
+        # --------------------------------------------------------------
+        # WORK SKILL 1 (TIER 0 — ZERO LLM): PRE-EARNINGS PREVIEW
+        # --------------------------------------------------------------
+        if decision.action == ActionType.EARNINGS_PREVIEW:
+            ticker = (decision.holding or active_ticker or (tickers[0] if tickers else "NVDA")).upper()
+            holding = await refresh_holding_from_notion(ticker) or db.get_holding(ticker)
+            if holding is None:
+                raise HTTPException(status_code=404, detail=f"Holding not found: {ticker}")
+            return UtteranceResponse(
+                transcript=transcript,
+                decision=decision,
+                hud=render_earnings_preview(holding),
+                holding=holding,
+                pending_write=None,
+                suggested_check=None,
+            )
+
+        # --------------------------------------------------------------
+        # WORK SKILL 2 (TIER 1 + TIER 2): PEER READ-ACROSS (e.g. TSM -> NVDA)
+        # --------------------------------------------------------------
+        if decision.action == ActionType.PEER_READ_ACROSS:
+            target_ticker = (decision.holding or active_ticker or (tickers[0] if tickers else "NVDA")).upper()
+            target_holding = await refresh_holding_from_notion(target_ticker) or db.get_holding(target_ticker)
+            if target_holding is None:
+                raise HTTPException(status_code=404, detail=f"Holding not found: {target_ticker}")
+
+            peer_ticker = (decision.peer_holding or "").upper()
+            if not peer_ticker or peer_ticker == target_ticker or db.get_holding(peer_ticker) is None:
+                peers = ", ".join(t for t in tickers if t != target_ticker)
+                hud = HudCard(
+                    header=_clip(f"WORK · PEER READ · {target_ticker}", 60),
+                    body=_clip(f"Specify a peer to read across to {target_ticker} (available: {peers}).", 240),
+                    footer="Hold: e.g. 'Read-across from TSMC to NVIDIA'",
+                )
+                return UtteranceResponse(
+                    transcript=transcript,
+                    decision=decision,
+                    hud=hud,
+                    holding=target_holding,
+                    pending_write=None,
+                    suggested_check=None,
+                )
+
+            # Distinguish specific-topic peer reads (e.g. "Microsoft capex" or "warranty reserves")
+            # from broad peer reads (e.g. "What's the read-across from TSMC to NVIDIA?").
+            peer_filler = {
+                "read", "across", "peer", "cross", "mean", "means", "impact",
+                "implication", "implications", "result", "results", "quarter",
+                "earning", "earnings", "holding", "thesis", "tell", "check",
+            }
+            specific_tokens = [
+                tok
+                for tok in extract_content_tokens(transcript, ticker=peer_ticker)
+                if tok not in peer_filler and tok != target_ticker.lower()
+            ]
+
+            if specific_tokens:
+                # Wearer asked about a specific topic: retrieve strictly on that topic (no thesis pollution)
+                peer_query = " ".join(specific_tokens)
+                peer_candidates = retriever.retrieve(peer_ticker, peer_query, limit=4)
+            else:
+                # Broad peer read: use all peer chunks (preferring AI/capacity/capex relevance via Jev)
+                peer_query = target_holding.saved_question
+                peer_candidates = db.list_chunks_for_ticker(peer_ticker)[:4]
+
+            if not peer_candidates:
+                hud = HudCard(
+                    header=_clip(f"WORK · {peer_ticker} → {target_ticker} · NO MATCH", 60),
+                    body=_clip(NO_MATCH_FINDING, 240),
+                    footer="Hold: ask again or dictate check",
+                )
+                return UtteranceResponse(
+                    transcript=transcript,
+                    decision=decision,
+                    hud=hud,
+                    holding=target_holding,
+                    pending_write=None,
+                    suggested_check=None,
+                )
+
+            if cfg.live_openrouter_enabled:
+                peer_question = (
+                    f"Which {peer_ticker} passage provides the strongest read-across for "
+                    f"{target_holding.ticker}'s thesis ({target_holding.saved_question}) "
+                    f"given the wearer's request: {transcript}"
+                )
+                match = await jev.select_best_chunk(peer_question, peer_candidates)
+                if match is None:
+                    hud = HudCard(
+                        header=_clip(f"WORK · {peer_ticker} → {target_ticker} · NO MATCH", 60),
+                        body=_clip(NO_MATCH_FINDING, 240),
+                        footer="Hold: ask again or dictate check",
+                    )
+                    return UtteranceResponse(
+                        transcript=transcript,
+                        decision=decision,
+                        hud=hud,
+                        holding=target_holding,
+                        pending_write=None,
+                        suggested_check=None,
+                    )
+                peer_chunk = match[0]
+            else:
+                if specific_tokens:
+                    ranked = await jev.select_best_chunk(peer_query, peer_candidates)
+                    if ranked is None:
+                        hud = HudCard(
+                            header=_clip(f"WORK · {peer_ticker} → {target_ticker} · NO MATCH", 60),
+                            body=_clip(NO_MATCH_FINDING, 240),
+                            footer="Hold: ask again or dictate check",
+                        )
+                        return UtteranceResponse(
+                            transcript=transcript,
+                            decision=decision,
+                            hud=hud,
+                            holding=target_holding,
+                            pending_write=None,
+                            suggested_check=None,
+                        )
+                    peer_chunk = ranked[0]
+                else:
+                    # Broad cross-read: prefer the demand/capacity/capex chunk when available
+                    peer_chunk = peer_candidates[-1]
+
+            read_across_text, draft = await worker.synthesize_peer_read_across(
+                target=target_holding,
+                peer_ticker=peer_ticker,
+                peer_chunk=peer_chunk,
+                utterance=transcript,
+            )
+            hud = HudCard(
+                header=_clip(f"PEER · {peer_ticker} → {target_ticker}", 60),
+                body=_clip(f"{read_across_text}\n[{peer_chunk.page_ref}]", 240),
+                footer="Tap: review check · Hold: dictate",
+            )
+            return UtteranceResponse(
+                transcript=transcript,
+                decision=decision,
+                hud=hud,
+                holding=target_holding,
+                pending_write=None,
+                suggested_check=draft,
             )
 
         # --------------------------------------------------------------

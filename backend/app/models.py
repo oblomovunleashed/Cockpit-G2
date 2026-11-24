@@ -14,8 +14,10 @@ class Mind(str, Enum):
 class ActionType(str, Enum):
     LOG_NOTE = "log_note"
     LOG_TASK = "log_task"
+    EARNINGS_PREVIEW = "earnings_preview"
     BRIEF_HOLDING = "brief_holding"
     FOLLOW_UP_SOURCE = "follow_up_source"
+    PEER_READ_ACROSS = "peer_read_across"
     DRAFT_NEXT_CHECK = "draft_next_check"
     CLARIFY = "clarify"
 
@@ -39,6 +41,7 @@ class JevDecision(BaseModel):
     mind: Mind
     action: ActionType
     holding: str | None = None
+    peer_holding: str | None = None
     needs_llm_worker: bool = False
     confidence: float = Field(default=1.0, ge=0.0, le=1.0)
     mode: Literal["openrouter", "mock"] = "mock"

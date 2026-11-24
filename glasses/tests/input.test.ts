@@ -6,6 +6,7 @@ import {
   Text_ItemEvent,
   type EvenHubEvent,
 } from '@evenrealities/even_hub_sdk';
+import { BrowserMicRecorder } from '../src/audio.ts';
 import {
   dispatchEvenHubEvent,
   executeTapAction,
@@ -288,6 +289,7 @@ test('tapping a no-match follow-up card does not fall through to the holding old
       mind: 'work',
       action: 'follow_up_source',
       holding: 'NVDA',
+      peer_holding: null,
       needs_llm_worker: true,
       confidence: 0.93,
       mode: 'mock',
@@ -358,4 +360,149 @@ test('tapping a no-match follow-up card does not fall through to the holding old
   await executeTapAction(state, deps);
   assert.equal(stageSuggestedCalls, 1);
   assert.equal(state.mode, 'CONFIRM_WRITE');
+});
+
+test('earnings_preview stays in RESULT (no tap fallback) while peer_read_across previews draft check first', async () => {
+  const previewRes: UtteranceResponse = {
+    transcript: 'Preview NVIDIA before earnings',
+    decision: {
+      mind: 'work',
+      action: 'earnings_preview',
+      holding: 'NVDA',
+      peer_holding: null,
+      needs_llm_worker: false,
+      confidence: 0.95,
+      mode: 'mock',
+      reasoning: 'Deterministic earnings_preview skill (zero LLM).',
+    },
+    hud: {
+      header: 'PREVIEW · NVDA · PRE-CALL',
+      body: 'Q: Does NVIDIA expect the margin trough to get deeper?',
+      footer: 'Hold: update check · Swipe: holdings',
+    },
+    holding: null,
+    pending_write: null,
+    suggested_check: null,
+  };
+  assert.equal(nextViewModeFromUtterance(previewRes), 'RESULT');
+
+  const peerRes: UtteranceResponse = {
+    transcript: "What's the read-across from TSMC to NVIDIA?",
+    decision: {
+      mind: 'work',
+      action: 'peer_read_across',
+      holding: 'NVDA',
+      peer_holding: 'TSM',
+      needs_llm_worker: true,
+      confidence: 0.95,
+      mode: 'mock',
+      reasoning: 'Peer read-across TSM -> NVDA',
+    },
+    hud: {
+      header: 'PEER · TSM → NVDA',
+      body: 'TSMC Q4 guide $52.3-54.3bn & maxed CoWoS support NVDA demand.',
+      footer: 'Tap: review check · Hold: dictate',
+    },
+    holding: null,
+    pending_write: null,
+    suggested_check: {
+      ticker: 'NVDA',
+      content: 'Check on NVDA call whether TSMC CoWoS tightness affects margins',
+      source_citation: 'Peer read: TSMC Q3 2026 Call · Oct 15',
+    },
+  };
+  assert.equal(nextViewModeFromUtterance(peerRes), 'RESULT');
+
+  const state = makeState({
+    mode: nextViewModeFromUtterance(peerRes),
+    suggestedCheck: peerRes.suggested_check,
+  });
+
+  const stagedBodies: string[] = [];
+  let confirmCalls = 0;
+  await executeTapAction(state, {
+    isRecording: () => false,
+    getActiveHolding: () => null,
+    stageCheck: async (draft) => {
+      stagedBodies.push(draft.content);
+      return {
+        pending_write: {
+          id: 'peer-draft-1',
+          mind: 'work',
+          kind: 'check',
+          content: draft.content,
+          ticker: draft.ticker,
+          source_citation: draft.source_citation,
+          updates_next_check: true,
+        },
+        hud: {
+          header: 'WORK · NVDA · CONFIRM CHECK',
+          body: draft.content,
+          footer: 'Tap: save to journal · Swipe: cancel',
+        },
+      };
+    },
+    stageSuggestedCheck: async () => {
+      throw new Error('should not fall through to holding check');
+    },
+    confirmWrite: async () => {
+      confirmCalls += 1;
+      throw new Error('should not confirm on first tap');
+    },
+    refreshDeckAfterSave: async () => {},
+    showCard: async () => {},
+  });
+
+  assert.equal(confirmCalls, 0);
+  assert.deepEqual(stagedBodies, [
+    'Check on NVDA call whether TSMC CoWoS tightness affects margins',
+  ]);
+  assert.equal(state.mode, 'CONFIRM_WRITE');
+});
+
+test('releasing mic button while getUserMedia permission is pending cancels capture and stops late stream', async () => {
+  let resolveStream!: (stream: MediaStream) => void;
+  const pendingStream = new Promise<MediaStream>((resolve) => {
+    resolveStream = resolve;
+  });
+
+  let trackStops = 0;
+  let audioContextCreated = false;
+
+  const mic = new BrowserMicRecorder({
+    getUserMedia: () => pendingStream,
+    createAudioContext: () => {
+      audioContextCreated = true;
+      throw new Error('AudioContext should not be created after cancellation');
+    },
+  });
+
+  const startPromise = mic.start();
+  assert.equal(mic.isStarting, true);
+  assert.equal(mic.isActive, true);
+  assert.equal(mic.isRecording, false);
+
+  // User releases button before permission prompt finishes
+  const stopResult = await mic.stop();
+  assert.equal(stopResult, null);
+  assert.equal(mic.isActive, false);
+
+  // Permission is subsequently granted -> late stream must be stopped immediately
+  const fakeStream = {
+    getTracks: () => [
+      {
+        stop: () => {
+          trackStops += 1;
+        },
+      },
+    ],
+  } as unknown as MediaStream;
+  resolveStream(fakeStream);
+
+  const started = await startPromise;
+  assert.equal(started, false);
+  assert.equal(trackStops, 1);
+  assert.equal(audioContextCreated, false);
+  assert.equal(mic.isRecording, false);
+  assert.equal(mic.isActive, false);
 });

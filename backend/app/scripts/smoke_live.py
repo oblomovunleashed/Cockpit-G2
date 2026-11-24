@@ -89,21 +89,24 @@ async def run_smoke(*, test_notion_write: bool) -> None:
         worker = LLMWorker(live_settings)
         stt = OpenRouterSTT(live_settings)
 
-        print("1) OpenRouter Jev System-1 Triage (POST /api/alpha/decisions)")
+        print("1) OpenRouter Jev System-1 Triage & Work Skill Dispatch (POST /api/alpha/decisions)")
         utterances = [
             "This podcast on TSMC was great",
             "Remember to buy a birthday present",
+            "Preview NVIDIA before earnings",
             "Can we review NVIDIA earnings?",
             "What did management expect to bring margins back up?",
+            "What's the read-across from TSMC to NVIDIA?",
             "At the next call, check whether those price increases are on schedule.",
         ]
         for text in utterances:
             try:
                 dec = await jev.route_utterance(text, available_tickers=tickers, active_ticker="NVDA")
+                peer_part = f" peer={dec.peer_holding}" if dec.peer_holding else ""
                 print(
                     f"   ✓ '{text}'\n"
-                    f"     -> mind={dec.mind.value} action={dec.action.value} "
-                    f"worker={dec.needs_llm_worker} holding={dec.holding} "
+                    f"     -> mind={dec.mind.value} skill={dec.action.value} "
+                    f"worker={dec.needs_llm_worker} holding={dec.holding}{peer_part} "
                     f"conf={dec.confidence:.2f} | {dec.reasoning}"
                 )
             except Exception as exc:
@@ -129,7 +132,8 @@ async def run_smoke(*, test_notion_write: bool) -> None:
             except Exception as exc:
                 print(f"   ✗ Jev selection failed on '{question}': {exc}")
 
-        print("\n3) OpenRouter System-2 LLM Synthesis (POST /api/v1/chat/completions)")
+        print("\n3) OpenRouter System-2 LLM Synthesis (thesis_review + peer_read_across)")
+        nvda = db.get_holding("NVDA")
         nvda_chunks = retriever.retrieve("NVDA", "margin trough", limit=2)
         if nvda_chunks:
             t0 = time.perf_counter()
@@ -140,8 +144,21 @@ async def run_smoke(*, test_notion_write: bool) -> None:
                 verdict=nvda_chunks[0].verdict,
             )
             ms = int((time.perf_counter() - t0) * 1000)
-            print(f"   ✓ ({ms}ms) finding ({len(finding)} chars): {finding}")
+            print(f"   ✓ thesis_review ({ms}ms, {len(finding)} chars): {finding}")
             print(f"     suggested_next_check: {next_check}")
+
+        tsm_chunks = retriever.retrieve("TSM", "AI CoWoS revenue guidance", limit=2)
+        if nvda and tsm_chunks:
+            t0 = time.perf_counter()
+            ra_finding, ra_draft = await worker.synthesize_peer_read_across(
+                target=nvda,
+                peer_ticker="TSM",
+                peer_chunk=tsm_chunks[0],
+                utterance="What's the read-across from TSMC to NVIDIA?",
+            )
+            ms = int((time.perf_counter() - t0) * 1000)
+            print(f"   ✓ peer_read_across TSM→NVDA ({ms}ms, {len(ra_finding)} chars): {ra_finding}")
+            print(f"     draft check ({ra_draft.source_citation}): {ra_draft.content}")
 
         print("\n4) OpenRouter STT Check (POST /api/v1/audio/transcriptions)")
         try:

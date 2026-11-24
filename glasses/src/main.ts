@@ -60,10 +60,16 @@ function updateCompanionPanel(decision?: JevDecision | null): void {
 
   const traceEl = document.getElementById('jev-trace');
   if (traceEl && decision) {
+    const scopePart = decision.peer_holding && decision.holding
+      ? `route: ${decision.peer_holding} → ${decision.holding}`
+      : decision.holding
+        ? `holding: ${decision.holding}`
+        : '';
     traceEl.textContent = [
       `mind: ${decision.mind.toUpperCase()}`,
-      `action: ${decision.action}`,
-      `llm_worker: ${decision.needs_llm_worker ? 'YES (System-2 Work)' : 'NO (System-1 fast log)'}`,
+      `skill: ${decision.action}`,
+      scopePart,
+      `llm_worker: ${decision.needs_llm_worker ? 'YES (System-2 DeepSeek)' : 'NO (System-1 / Deterministic)'}`,
       `confidence: ${(decision.confidence * 100).toFixed(0)}% (${decision.mode})`,
       decision.reasoning ? `note: ${decision.reasoning}` : '',
     ]

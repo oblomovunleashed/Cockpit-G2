@@ -38,7 +38,8 @@ async def test_jev_router_parses_live_openrouter_probability_schema(
                 "answers": {
                     "mind": {"type": "choice", "choice": "personal", "confidence": 0.96},
                     "action": {"type": "choice", "choice": "log_task", "confidence": 0.95},
-                    "holding": {"type": "choice", "choice": "none", "confidence": 0.99},
+                    "holding": {"type": "choice", "choice": "TSM", "confidence": 0.99},
+                    "peer_holding": {"type": "choice", "choice": "TSM", "confidence": 0.99},
                     "needs_llm_worker": {"type": "noul", "probability": 0.04},
                 },
                 "usage": {"input_tokens": 140, "output_tokens": 0, "cost": 0.000006},
@@ -69,6 +70,7 @@ async def test_jev_router_parses_live_openrouter_probability_schema(
     assert decision.action == ActionType.LOG_TASK
     assert decision.needs_llm_worker is False
     assert decision.holding is None
+    assert decision.peer_holding is None
     assert "worker_p=0.04" in (decision.reasoning or "")
     assert "$0.000006" in (decision.reasoning or "")
 

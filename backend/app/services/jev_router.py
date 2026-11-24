@@ -85,26 +85,40 @@ class JevRouter:
                 },
                 "action": {
                     "type": "choice",
-                    "instructions": "What action should Cockpit take?",
+                    "instructions": "Which Cockpit skill or action should handle this utterance?",
                     "criteria": {
                         "log_note": "Save a short personal or interests reflection, podcast/book reaction, or general thought without calling an LLM.",
                         "log_task": "Save a short personal reminder, errand, gift, or to-do task without calling an LLM.",
-                        "brief_holding": "Open or refresh the general earnings overview card for a holding (e.g. 'review NVIDIA earnings', 'what changed?'), NOT a specific detailed question.",
-                        "follow_up_source": "Ask a specific factual follow-up question about a metric, driver, margin recovery, management comment, or outlook from an earnings call or release.",
+                        "earnings_preview": "Pre-earnings setup or checklist BEFORE a print: show what the wearer is watching, saved question, and prior guidance baseline (e.g. 'preview NVIDIA earnings', 'what am I watching on TSMC?'). Does NOT need an LLM.",
+                        "brief_holding": "Post-earnings thesis review for a single holding: open or refresh the earnings delta card (e.g. 'review NVIDIA earnings', 'what changed?'), NOT a pre-earnings preview or cross-company read-across.",
+                        "follow_up_source": "Ask a specific factual follow-up question about one company's metric, driver, margin recovery, management comment, or outlook.",
+                        "peer_read_across": "Cross-company read-across comparing one company's filing/results against another holding's thesis (e.g. 'read-across from TSMC to NVIDIA', 'what does Microsoft capex mean for NVIDIA?').",
                         "draft_next_check": "Explicitly dictate a watch item or question to check at the next earnings call or next quarter.",
                         "clarify": "The utterance is genuinely ambiguous and needs a quick tap clarification.",
                     },
                 },
                 "holding": {
                     "type": "choice",
-                    "instructions": "Which portfolio ticker is this utterance about?",
+                    "instructions": (
+                        "Which primary/target portfolio ticker is this utterance about? "
+                        "For peer read-across (e.g. 'from TSMC to NVIDIA'), pick the TARGET ticker (NVIDIA)."
+                    ),
+                    "criteria": ticker_criteria,
+                },
+                "peer_holding": {
+                    "type": "choice",
+                    "instructions": (
+                        "Only for cross-company peer read-across: which PEER/SOURCE ticker is being read from "
+                        "(e.g. in 'read-across from TSMC to NVIDIA', pick TSM)? Otherwise pick 'none'."
+                    ),
                     "criteria": ticker_criteria,
                 },
                 "needs_llm_worker": {
                     "type": "noul",
                     "instructions": (
-                        "Does this request require retrieving issuer documents and running "
-                        "the Work LLM worker (true), or can it be logged immediately without an LLM (false)?"
+                        "Does this request require running the System-2 LLM synthesis worker (true for thesis review, "
+                        "source follow-up, or peer read-across), or can deterministic code handle it with zero LLM "
+                        "(false for fast logs, drafts, and pre-earnings previews)?"
                     ),
                 },
             },
@@ -118,19 +132,47 @@ class JevRouter:
         mind_ans = answers.get("mind", {})
         action_ans = answers.get("action", {})
         holding_ans = answers.get("holding", {})
+        peer_ans = answers.get("peer_holding", {})
         worker_ans = answers.get("needs_llm_worker", {})
 
         mind = _parse_enum(Mind, mind_ans.get("choice"), Mind.INTERESTS)
         action = _parse_enum(ActionType, action_ans.get("choice"), ActionType.LOG_NOTE)
         raw_holding = str(holding_ans.get("choice", "none")).strip()
         holding = None if raw_holding.lower() == "none" else raw_holding.upper()
-        if holding is None and mind == Mind.WORK and active_ticker:
-            holding = active_ticker.upper()
+        raw_peer = str(peer_ans.get("choice", "none")).strip()
+        peer_holding = None if raw_peer.lower() == "none" else raw_peer.upper()
+
+        if mind != Mind.WORK:
+            holding = None
+            peer_holding = None
+        else:
+            if holding is None and active_ticker:
+                holding = active_ticker.upper()
+            if action != ActionType.PEER_READ_ACROSS:
+                peer_holding = None
+            elif peer_holding == holding:
+                # If user asked "read-across from TSMC" while viewing NVDA, disambiguate target vs peer
+                if active_ticker and active_ticker.upper() != holding:
+                    peer_holding = holding
+                    holding = active_ticker.upper()
+                else:
+                    peer_holding = None
 
         worker_prob = _extract_noul_probability(worker_ans, 0.0)
+        no_llm_actions = (
+            ActionType.LOG_NOTE,
+            ActionType.LOG_TASK,
+            ActionType.DRAFT_NEXT_CHECK,
+            ActionType.EARNINGS_PREVIEW,
+        )
+        llm_actions = (
+            ActionType.BRIEF_HOLDING,
+            ActionType.FOLLOW_UP_SOURCE,
+            ActionType.PEER_READ_ACROSS,
+        )
         needs_worker = (
-            action in (ActionType.BRIEF_HOLDING, ActionType.FOLLOW_UP_SOURCE)
-            or (mind == Mind.WORK and worker_prob >= 0.55 and action != ActionType.DRAFT_NEXT_CHECK)
+            action in llm_actions
+            or (mind == Mind.WORK and worker_prob >= 0.55 and action not in no_llm_actions)
         )
         confidence = float(action_ans.get("confidence", mind_ans.get("confidence", 0.9)))
         cost_part = f", ${float(cost):.6f}" if isinstance(cost, (int, float)) else ""
@@ -139,6 +181,7 @@ class JevRouter:
             mind=mind,
             action=action,
             holding=holding,
+            peer_holding=peer_holding,
             needs_llm_worker=needs_worker,
             confidence=min(max(confidence, 0.0), 1.0),
             mode="openrouter",
@@ -241,17 +284,30 @@ class JevRouter:
     # ------------------------------------------------------------------
 
     @staticmethod
-    def _detect_explicit_ticker(lower: str, available_tickers: list[str]) -> str | None:
+    def _detect_explicit_tickers(lower: str, available_tickers: list[str]) -> list[str]:
+        """Returns explicitly mentioned tickers ordered by first appearance in the utterance."""
         aliases = {
             "NVDA": ("nvda", "nvidia"),
             "MSFT": ("msft", "microsoft", "azure"),
             "TSM": ("tsm", "tsmc"),
         }
+        hits: list[tuple[int, str]] = []
         for ticker in available_tickers:
             names = aliases.get(ticker.upper(), (ticker.lower(),))
-            if any(re.search(rf"\b{re.escape(name)}\b", lower) for name in names):
-                return ticker.upper()
-        return None
+            positions = [
+                m.start()
+                for name in names
+                for m in re.finditer(rf"\b{re.escape(name)}\b", lower)
+            ]
+            if positions:
+                hits.append((min(positions), ticker.upper()))
+        hits.sort(key=lambda item: item[0])
+        return [ticker for _, ticker in hits]
+
+    @classmethod
+    def _detect_explicit_ticker(cls, lower: str, available_tickers: list[str]) -> str | None:
+        found = cls._detect_explicit_tickers(lower, available_tickers)
+        return found[0] if found else None
 
     def _mock_route_utterance(
         self,
@@ -286,8 +342,41 @@ class JevRouter:
                 reasoning="Fast-path interests note detected (no LLM worker).",
             )
 
-        explicit_ticker = self._detect_explicit_ticker(lower, available_tickers)
+        explicit_tickers = self._detect_explicit_tickers(lower, available_tickers)
+        explicit_ticker = explicit_tickers[0] if explicit_tickers else None
         resolved_ticker = explicit_ticker or active_ticker or (available_tickers[0] if available_tickers else None)
+
+        # Peer read-across ("read-across from TSMC to NVIDIA", "what does Microsoft mean for NVIDIA")
+        if any(kw in lower for kw in ("read-across", "read across", "peer read", "cross-read", "cross read", "mean for")):
+            if len(explicit_tickers) >= 2:
+                peer_t, target_t = explicit_tickers[0], explicit_tickers[1]
+            elif len(explicit_tickers) == 1 and active_ticker and explicit_tickers[0] != active_ticker.upper():
+                peer_t, target_t = explicit_tickers[0], active_ticker.upper()
+            else:
+                peer_t = explicit_ticker
+                target_t = active_ticker.upper() if active_ticker else (available_tickers[0] if available_tickers else None)
+            return JevDecision(
+                mind=Mind.WORK,
+                action=ActionType.PEER_READ_ACROSS,
+                holding=target_t,
+                peer_holding=peer_t,
+                needs_llm_worker=True,
+                confidence=0.95,
+                mode="mock",
+                reasoning=f"Work peer_read_across skill ({peer_t} -> {target_t}) routes to System-2 synthesis.",
+            )
+
+        # Pre-earnings preview (Tier 0 deterministic — NO LLM worker!)
+        if any(kw in lower for kw in ("preview", "before earnings", "pre-call", "pre call", "what am i watching", "baseline")):
+            return JevDecision(
+                mind=Mind.WORK,
+                action=ActionType.EARNINGS_PREVIEW,
+                holding=resolved_ticker,
+                needs_llm_worker=False,
+                confidence=0.95,
+                mode="mock",
+                reasoning="Deterministic earnings_preview skill (zero LLM).",
+            )
 
         # Next-quarter check dictation ("At the next call, check whether those price increases are on schedule")
         if any(kw in lower for kw in ("next call", "next quarter", "check whether", "track whether", "save check", "watch item")):

@@ -26,12 +26,12 @@
 
 ---
 
-## Optional API Feature Requests (Up to 5 — Collect During Build Week)
+## Optional API Feature Requests (Up to 5 — Collected During Build Week)
 
-Record concrete friction encountered while building with Even Hub SDK, OpenRouter/Jev, and Notion:
+Concrete friction encountered while building with Even Hub SDK, OpenRouter/Jev, and Notion:
 
-1. *[Even Hub SDK]* ...
-2. *[OpenRouter / Jev]* ...
-3. *[Notion API]* ...
-4. ...
-5. ...
+1. **[Even Hub SDK]** Normalize protobuf zero-value `CLICK_EVENT` (`0`) inside the SDK before invoking `onEvenHubEvent` listeners instead of passing `eventType: undefined` on single taps.
+2. **[Even Hub SDK / Simulator]** Provide a built-in simulated microphone clip replay flag in `evenhub-simulator` (e.g. `--audio-file sample.wav`) so automated tests and demo recordings can drive `audioEvent.audioPcm` deterministically.
+3. **[OpenRouter Decisions API / Jev]** Document prominently in quickstart examples that `noul` responses return `probability` (not `noul`) and that every question in `questions` is evaluated independently against `state` (so shared retrieval context must live in `state`, not sibling `criteria`).
+4. **[OpenRouter STT]** Support streaming chunked PCM/WebSocket transcription alongside base64 WAV on `/api/v1/audio/transcriptions` to shave ~1s off push-to-talk smart-glasses latency.
+5. **[Notion API]** Support a lightweight webhook or `last_edited_time` conditional query on database rows so local HUD caches can detect Notion `Saved Question` edits without polling full tables.

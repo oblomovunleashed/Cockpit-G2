@@ -31,7 +31,7 @@ Cockpit tracks the full **61-position portfolio (`100.00%` weight)** in `backend
 | `earnings_preview` / `brief_holding` (other 58 holdings or external names) | **Tier 1 + Tier 2 Web** (Jev + DeepSeek Web) | Date-aware web-grounded preview/review with automatic weight badge when held (e.g. `PREVIEW \| INSM (4.2%) \| WEB`) and no badge when external (`PREVIEW \| GOOGL \| WEB`). |
 | `brief_holding` (`thesis_review`, core indexed) | **Tier 1 + Tier 2** (Jev + DeepSeek) | Pulls latest Notion question first, verifies `is_answered`, surfaces one sourced delta card (`HELD`/`AHEAD`/`WATCH`) or `No matching passage`. |
 | `follow_up_source` | **Tier 1 + Tier 2** | Retrieves specific passage (e.g. Signatera ASP & FCF on Natera Q3 call) and returns `suggested_check` (never stages an unseen write; tap previews exact text on `CONFIRM CHECK`). |
-| `peer_read_across` | **Tier 1 + Tier 2** | Jev resolves both `peer_holding` (`AMZN`) and target `holding` (`STX`); DeepSeek synthesizes a cross-company read-across card citing Amazon's `$220B` AWS AI capex + stageable `STX` check. |
+| `peer_read_across` | **Tier 1 + Tier 2** | Jev resolves both `peer_holding` (`AMZN`) and target `holding` (`STX`); DeepSeek synthesizes a cross-company read-across card citing Amazon's `~$220B` companywide FY26 cash capex guidance + stageable `STX` check (unsupported peers return a clarification card). |
 
 ---
 

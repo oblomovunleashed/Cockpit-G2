@@ -1,12 +1,13 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 import re
 import time
 import httpx
 
 from app.config import Settings
 from app.models import ActionType, DocumentChunk, JevDecision, Mind, Verdict
-from app.portfolio import match_portfolio_position_in_text
+from app.portfolio import find_portfolio_mentions_in_text
 from app.services.retrieval import extract_content_tokens
 
 
@@ -72,9 +73,21 @@ _STOP_COMPANY_WORDS = {
     "on", "in", "at", "about", "before", "after", "next", "last", "latest", "upcoming",
     "recent", "current", "one", "holding", "company", "stock", "name", "earnings",
     "preview", "review", "brief", "check", "update", "results", "quarter", "print",
-    "call", "guidance", "margin", "margins", "revenue", "what", "how", "why", "did",
-    "do", "does", "is", "are", "was", "were", "changed",
+    "call", "guidance", "margin", "margins", "revenue", "capex", "numbers", "report",
+    "what", "how", "why", "did", "do", "does", "is", "are", "was", "were", "changed",
+    "compared", "with", "vs", "versus", "against", "read", "across", "read-across",
+    "peer", "cross", "cross-read", "mean", "means", "impact", "impacts", "implication",
+    "implications", "from", "and",
 }
+
+
+@dataclass(frozen=True)
+class _CompanyMention:
+    start: int
+    end: int
+    tracked_ticker: str | None
+    display_name: str
+    weight_pct: float = 0.0
 
 _RELATIVE_DATE_RE = re.compile(
     r"\b(tomorrow|tonight|today|yesterday|this weekend|next week|next month|"
@@ -178,6 +191,10 @@ class JevRouter:
             t: f"The peer/source company being read from is {holdings_map.get(t.upper(), t.upper())}."
             for t in available_tickers
         }
+        peer_criteria["untracked"] = (
+            "The wearer explicitly named a peer/source company that is NOT in the indexed watchlist "
+            "(for example TSMC, Western Digital, Apple, Insmed)."
+        )
         peer_criteria["none"] = "No peer company or not a peer read-across."
 
         state_lines = [
@@ -276,29 +293,48 @@ class JevRouter:
             holding = None
             peer_holding = None
             requested_company = None
+        elif action == ActionType.PEER_READ_ACROSS:
+            parsed_target, parsed_peer, unsupported = self._resolve_peer_and_target(
+                transcript,
+                available_tickers=available_tickers,
+                active_ticker=active_ticker,
+            )
+            if unsupported is not None or raw_peer.lower() == "untracked":
+                holding = parsed_target
+                peer_holding = parsed_peer if raw_peer.lower() != "untracked" else None
+                requested_company = unsupported or self.extract_requested_company(transcript, available_tickers)
+            else:
+                if parsed_target is not None or parsed_peer is not None:
+                    holding = parsed_target
+                    peer_holding = parsed_peer
+                else:
+                    if raw_holding.lower() in ("implicit_active", "none", "untracked"):
+                        holding = active_ticker.upper() if active_ticker else None
+                    else:
+                        holding = raw_holding.upper()
+                    if raw_peer.lower() in ("none", "untracked"):
+                        peer_holding = None
+                    if peer_holding and peer_holding == holding:
+                        peer_holding = None
         else:
-            explicit_tracked = self._detect_explicit_tickers(transcript.lower(), available_tickers)
-            untracked_extracted = self.extract_requested_company(transcript, available_tickers)
+            peer_holding = None
+            target_mention = self._resolve_target_mention(transcript, available_tickers)
 
-            if raw_holding.lower() == "untracked" or (untracked_extracted and not explicit_tracked):
+            if target_mention is not None:
+                if target_mention.tracked_ticker is not None:
+                    holding = target_mention.tracked_ticker
+                    requested_company = None
+                else:
+                    holding = None
+                    requested_company = target_mention.display_name
+            elif raw_holding.lower() == "untracked":
                 holding = None
-                requested_company = untracked_extracted or self._fallback_company_phrase(transcript)
+                requested_company = self._fallback_company_phrase(transcript)
             elif raw_holding.lower() in ("implicit_active", "none"):
-                if explicit_tracked:
-                    holding = explicit_tracked[0]
-                elif active_ticker:
+                if active_ticker:
                     holding = active_ticker.upper()
             else:
                 holding = raw_holding.upper()
-
-            if action != ActionType.PEER_READ_ACROSS:
-                peer_holding = None
-            elif peer_holding == holding:
-                if active_ticker and active_ticker.upper() != holding:
-                    peer_holding = holding
-                    holding = active_ticker.upper()
-                else:
-                    peer_holding = None
 
         is_adhoc_company = mind == Mind.WORK and holding is None and requested_company is not None
         no_llm_actions = (
@@ -454,59 +490,270 @@ class JevRouter:
         return [ticker for _, ticker in hits]
 
     @classmethod
-    def extract_requested_company(cls, transcript: str, available_tickers: list[str]) -> str | None:
+    def _find_company_mentions(
+        cls,
+        transcript: str,
+        available_tickers: list[str],
+    ) -> list[_CompanyMention]:
         """
-        Detects an explicitly named company outside the indexed 3-holding watchlist —
-        checking the full 61-position portfolio first, then common external companies,
-        then regex extraction — so requests like 'Preview Insmed earnings' or
-        'Preview Alphabet earnings' never fall back to an unrelated holding.
+        Finds all non-overlapping company mentions across the indexed watchlist,
+        the full 61-position portfolio, common external companies, and earnings-clause
+        regex patterns, ordered by text position with longest/most-specific span winning.
         """
-        excluded = {t.upper() for t in available_tickers}
-
-        # 1. Check all other holdings in the 61-position portfolio first
-        portfolio_hit = match_portfolio_position_in_text(transcript, exclude_tickers=excluded)
-        if portfolio_hit is not None:
-            return portfolio_hit.display_name
-
         lower = transcript.lower()
+        excluded = {t.upper() for t in available_tickers}
         tracked_names: set[str] = set()
-        for t in available_tickers:
-            tracked_names.add(t.lower())
-            tracked_names.update(TRACKED_ALIASES.get(t.upper(), ()))
+        raw: list[_CompanyMention] = []
 
-        # 2. Known external public/private companies
-        known_hits: list[tuple[int, str]] = []
+        # 1. Indexed watchlist tickers and aliases
+        for ticker in available_tickers:
+            t_up = ticker.upper()
+            names = set(TRACKED_ALIASES.get(t_up, ())) | {t_up.lower()}
+            tracked_names.update(names)
+            for name in names:
+                for m in re.finditer(rf"\b{re.escape(name)}\b", lower):
+                    raw.append(
+                        _CompanyMention(
+                            start=m.start(),
+                            end=m.end(),
+                            tracked_ticker=t_up,
+                            display_name=t_up,
+                            weight_pct=100.0,
+                        )
+                    )
+
+        # 2. Remaining holdings in the 61-position portfolio (longest-span-first)
+        for start, end, pos in find_portfolio_mentions_in_text(transcript, exclude_tickers=excluded):
+            raw.append(
+                _CompanyMention(
+                    start=start,
+                    end=end,
+                    tracked_ticker=None,
+                    display_name=pos.display_name,
+                    weight_pct=pos.weight_pct,
+                )
+            )
+
+        # 3. Known external public/private companies
         for alias, display in KNOWN_UNTRACKED_COMPANIES.items():
             if alias in tracked_names:
                 continue
-            m = re.search(rf"\b{re.escape(alias)}\b", lower)
-            if m:
-                known_hits.append((m.start(), display))
-        if known_hits:
-            known_hits.sort(key=lambda item: item[0])
-            return known_hits[0][1]
+            for m in re.finditer(rf"\b{re.escape(alias)}\b", lower):
+                raw.append(
+                    _CompanyMention(
+                        start=m.start(),
+                        end=m.end(),
+                        tracked_ticker=None,
+                        display_name=display,
+                        weight_pct=0.0,
+                    )
+                )
 
-        # 3. Pattern extraction around 'preview/review <Company> earnings' or '<Company> earnings'
+        # Deduplicate known dictionary spans first (earliest start, then longest span)
+        raw.sort(
+            key=lambda item: (
+                item.start,
+                -(item.end - item.start),
+                0 if item.tracked_ticker is not None else 1,
+                -item.weight_pct,
+            )
+        )
+        accepted: list[_CompanyMention] = []
+        for mention in raw:
+            if any(mention.start < acc.end and mention.end > acc.start for acc in accepted):
+                continue
+            accepted.append(mention)
+
+        # 4. Pattern extraction for unlisted companies (e.g. 'Preview Rivian earnings')
         patterns = (
-            r"\b(?:preview|review|brief|check)\s+(?:on\s+|for\s+)?([A-Za-z0-9&.\- ]{2,32}?)\s+(?:before\s+)?(?:earnings|results|quarter|print)\b",
+            r"\b(?:preview|review|brief|check)\s+(?:on\s+|for\s+)?([A-Za-z0-9&.\- ]{2,36}?)\s+(?:before\s+)?(?:earnings|results|quarter|print)\b",
             r"\b([A-Z][A-Za-z0-9&.\-]*(?:\s+[A-Z][A-Za-z0-9&.\-]*)?)\s+(?:earnings|results|quarter|print)\b",
-            r"\b(?:preview|review)\s+(?:earnings\s+(?:for|of|on)\s+)([A-Za-z0-9&.\- ]{2,32})",
+            r"\b(?:preview|review)\s+earnings\s+(?:for|of|on)\s+([A-Za-z0-9&.\- ]{2,36})",
         )
         for pat in patterns:
-            m = re.search(pat, transcript, flags=re.IGNORECASE if pat.startswith(r"\b(?:preview") else 0)
-            if not m:
-                continue
-            candidate = m.group(1).strip(" ?.,!'\"")
-            words = [w for w in candidate.split() if w.lower() not in _STOP_COMPANY_WORDS]
-            if not words:
-                continue
-            cleaned = " ".join(words)
-            if cleaned.lower() in tracked_names:
-                return None
-            if any(w.lower() in tracked_names for w in words):
-                return None
-            return cleaned
+            flags = re.IGNORECASE if pat.startswith(r"\b(?:preview") else 0
+            for m in re.finditer(pat, transcript, flags=flags):
+                span_start, span_end = m.start(1), m.end(1)
+                if any(span_start < acc.end and span_end > acc.start for acc in accepted):
+                    continue
+                candidate = re.split(
+                    r"\s+(?:compared\s+(?:with|to)|versus|vs\.?|against)\b",
+                    m.group(1),
+                    maxsplit=1,
+                    flags=re.IGNORECASE,
+                )[0].strip(" ?.,!'\"")
+                words = [w for w in candidate.split() if w.lower() not in _STOP_COMPANY_WORDS]
+                if not words:
+                    continue
+                cleaned = " ".join(words)
+                if cleaned.lower() in tracked_names or any(w.lower() in tracked_names for w in words):
+                    continue
+                accepted.append(
+                    _CompanyMention(
+                        start=span_start,
+                        end=span_end,
+                        tracked_ticker=None,
+                        display_name=cleaned,
+                        weight_pct=0.0,
+                    )
+                )
 
+        accepted.sort(key=lambda item: item.start)
+        return accepted
+
+    @classmethod
+    def _resolve_target_mention(
+        cls,
+        transcript: str,
+        available_tickers: list[str],
+    ) -> _CompanyMention | None:
+        """
+        Resolves the primary requested company before incidental mentions
+        (e.g. 'Preview Apple earnings compared with Insmed' -> Apple, not Insmed).
+        """
+        mentions = cls._find_company_mentions(transcript, available_tickers)
+        if not mentions:
+            return None
+
+        target_match = re.search(
+            r"\b(?:preview|review|brief|check)\s+(?:on\s+|for\s+)?([^,.;?!]+?)(?:\s+(?:compared\s+(?:with|to)|versus|vs\.?|against)\b|$)",
+            transcript,
+            flags=re.IGNORECASE,
+        )
+        if target_match:
+            c_start, c_end = target_match.start(1), target_match.end(1)
+            in_target = [m for m in mentions if m.start >= c_start and m.start < c_end]
+            if in_target:
+                return in_target[0]
+
+        return mentions[0]
+
+    @classmethod
+    def _extract_clause_entity(
+        cls,
+        clause: str,
+        available_tickers: list[str],
+    ) -> _CompanyMention | None:
+        mentions = cls._find_company_mentions(clause, available_tickers)
+        if mentions:
+            return mentions[0]
+        words = [
+            w.strip("?.,!'\"")
+            for w in clause.split()
+            if w.strip("?.,!'\"") and w.strip("?.,!'\" ").lower() not in _STOP_COMPANY_WORDS
+        ]
+        if 1 <= len(words) <= 3:
+            cleaned = " ".join(words)
+            return _CompanyMention(
+                start=0,
+                end=len(cleaned),
+                tracked_ticker=None,
+                display_name=cleaned,
+                weight_pct=0.0,
+            )
+        return None
+
+    @classmethod
+    def _resolve_peer_and_target(
+        cls,
+        transcript: str,
+        *,
+        available_tickers: list[str],
+        active_ticker: str | None,
+    ) -> tuple[str | None, str | None, str | None]:
+        """
+        Resolves (target_ticker, peer_ticker, unsupported_company) for peer read-across queries.
+        Preserves explicit peer/target roles ('from TSMC to Seagate' -> target=STX, peer=None,
+        unsupported=TSM) so an unsupported peer never swaps the target into the peer slot.
+        """
+        peer_mention: _CompanyMention | None = None
+        target_mention: _CompanyMention | None = None
+        matched_direction = False
+
+        # 1. 'from <peer> to/for/on <target>'
+        m_from_to = re.search(
+            r"\bfrom\s+([^,.;?!]+?)\s+(?:to|for|on)\s+([^,.;?!]+)",
+            transcript,
+            flags=re.IGNORECASE,
+        )
+        # 2. 'to/for <target> from <peer>'
+        m_to_from = re.search(
+            r"\b(?:to|for)\s+([^,.;?!]+?)\s+from\s+([^,.;?!]+)",
+            transcript,
+            flags=re.IGNORECASE,
+        )
+        # 3. '<peer> mean(s) for <target>'
+        m_mean_for = re.search(
+            r"([^,.;?!]+?)\s+mean(?:s)?\s+for\s+([^,.;?!]+)",
+            transcript,
+            flags=re.IGNORECASE,
+        )
+
+        if m_from_to:
+            matched_direction = True
+            peer_mention = cls._extract_clause_entity(m_from_to.group(1), available_tickers)
+            target_mention = cls._extract_clause_entity(m_from_to.group(2), available_tickers)
+        elif m_to_from:
+            matched_direction = True
+            target_mention = cls._extract_clause_entity(m_to_from.group(1), available_tickers)
+            peer_mention = cls._extract_clause_entity(m_to_from.group(2), available_tickers)
+        elif m_mean_for:
+            matched_direction = True
+            peer_mention = cls._extract_clause_entity(m_mean_for.group(1), available_tickers)
+            target_mention = cls._extract_clause_entity(m_mean_for.group(2), available_tickers)
+
+        if not matched_direction:
+            raw_mentions = cls._find_company_mentions(transcript, available_tickers)
+            mentions: list[_CompanyMention] = []
+            seen_entities: set[str] = set()
+            for m in raw_mentions:
+                entity_key = m.tracked_ticker or m.display_name
+                if entity_key in seen_entities:
+                    continue
+                seen_entities.add(entity_key)
+                mentions.append(m)
+
+            if len(mentions) >= 2:
+                peer_mention, target_mention = mentions[0], mentions[1]
+            elif len(mentions) == 1:
+                only = mentions[0]
+                if active_ticker and (only.tracked_ticker is None or only.tracked_ticker != active_ticker.upper()):
+                    peer_mention = only
+                    target_mention = None
+                else:
+                    target_mention = only
+                    peer_mention = None
+
+        if target_mention is not None:
+            target_ticker = target_mention.tracked_ticker
+        else:
+            target_ticker = active_ticker.upper() if active_ticker else None
+
+        peer_ticker = peer_mention.tracked_ticker if peer_mention is not None else None
+
+        unsupported: str | None = None
+        if peer_mention is not None and peer_mention.tracked_ticker is None:
+            unsupported = peer_mention.display_name
+        elif target_mention is not None and target_mention.tracked_ticker is None:
+            unsupported = target_mention.display_name
+
+        if peer_ticker and target_ticker and peer_ticker == target_ticker:
+            peer_ticker = None
+
+        return target_ticker, peer_ticker, unsupported
+
+    @classmethod
+    def extract_requested_company(cls, transcript: str, available_tickers: list[str]) -> str | None:
+        """
+        Detects an explicitly named primary company outside the indexed watchlist,
+        resolving target-clause priority and specificity before incidental mentions.
+        """
+        target = cls._resolve_target_mention(transcript, available_tickers)
+        if target is not None and target.tracked_ticker is None:
+            return target.display_name
+        for mention in cls._find_company_mentions(transcript, available_tickers):
+            if mention.tracked_ticker is None:
+                return mention.display_name
         return None
 
     @staticmethod
@@ -558,34 +805,47 @@ class JevRouter:
                 reasoning="Fast-path interests note detected (no LLM worker).",
             )
 
-        explicit_tickers = self._detect_explicit_tickers(lower, available_tickers)
-        explicit_ticker = explicit_tickers[0] if explicit_tickers else None
-        untracked_company = None if explicit_ticker else self.extract_requested_company(transcript, available_tickers)
-        resolved_ticker = (
-            None
-            if untracked_company
-            else (explicit_ticker or (active_ticker.upper() if active_ticker else None))
-        )
-
         # Peer read-across ("what does Amazon capex mean for Seagate?", "read-across from Amazon to Seagate")
         if any(kw in lower for kw in ("read-across", "read across", "peer read", "cross-read", "cross read", "mean for")):
-            if len(explicit_tickers) >= 2:
-                peer_t, target_t = explicit_tickers[0], explicit_tickers[1]
-            elif len(explicit_tickers) == 1 and active_ticker and explicit_tickers[0] != active_ticker.upper():
-                peer_t, target_t = explicit_tickers[0], active_ticker.upper()
-            else:
-                peer_t = explicit_ticker
-                target_t = active_ticker.upper() if active_ticker else (available_tickers[0] if available_tickers else None)
+            target_t, peer_t, unsupported = self._resolve_peer_and_target(
+                transcript,
+                available_tickers=available_tickers,
+                active_ticker=active_ticker,
+            )
+            can_synthesize = target_t is not None and peer_t is not None
             return JevDecision(
                 mind=Mind.WORK,
                 action=ActionType.PEER_READ_ACROSS,
                 holding=target_t,
                 peer_holding=peer_t,
-                needs_llm_worker=True,
+                requested_company=unsupported,
+                needs_llm_worker=can_synthesize,
                 confidence=0.95,
                 mode="mock",
-                reasoning=f"Work peer_read_across skill ({peer_t} -> {target_t}) routes to System-2 synthesis.",
+                reasoning=(
+                    f"Work peer_read_across skill ({peer_t} -> {target_t}) routes to System-2 synthesis."
+                    if can_synthesize
+                    else f"Peer read-across needs clarification (unsupported={unsupported or 'missing'}, target={target_t})."
+                ),
             )
+
+        target_mention = self._resolve_target_mention(transcript, available_tickers)
+        if target_mention is not None:
+            if target_mention.tracked_ticker is not None:
+                explicit_ticker: str | None = target_mention.tracked_ticker
+                untracked_company: str | None = None
+            else:
+                explicit_ticker = None
+                untracked_company = target_mention.display_name
+        else:
+            explicit_ticker = None
+            untracked_company = None
+
+        resolved_ticker = (
+            None
+            if untracked_company
+            else (explicit_ticker or (active_ticker.upper() if active_ticker else None))
+        )
 
         # Pre-earnings preview (Tier 0 zero-LLM for indexed holdings; web worker for all other names)
         if any(kw in lower for kw in ("preview", "before earnings", "pre-call", "pre call", "what am i watching", "baseline")):

@@ -416,7 +416,7 @@ test('earnings_preview stays in RESULT (no tap fallback) while peer_read_across 
     },
     hud: {
       header: 'PEER · AMZN → STX',
-      body: 'Amazon ~$220B FY26 AI data-center capex supports Seagate nearline HAMR demand.',
+      body: 'Amazon ~$220B companywide FY26 cash capex supports Seagate nearline HAMR demand.',
       footer: 'Tap: review check · Hold: dictate',
     },
     holding: null,

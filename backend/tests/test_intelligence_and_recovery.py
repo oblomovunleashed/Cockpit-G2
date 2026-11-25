@@ -467,3 +467,125 @@ async def test_enrichment_rejects_unverified_model_url_not_in_provider_annotatio
     res2 = await worker.enrich_journal_entry(entry)
     assert res2.status == "enriched"
     assert res2.enriched_url == ""
+
+
+def test_router_target_specificity_and_unsupported_peer_clarification(tmp_path: Path) -> None:
+    """
+    Regression checks for PR #6 router accuracy:
+    1. 'Preview Apple earnings compared with Insmed' opens Apple (not Insmed).
+    2. 'Preview Fox Class B earnings' opens FOX Class B 0.8% (not FOXA Class A 4.3%).
+    3. 'Read-across from TSMC to Seagate' asks for clarification on STX instead of returning STX -> NTRA.
+    4. 'Read-across from Amazon to Insmed' asks for clarification instead of defaulting to NTRA.
+    5. Seeded earnings comparisons use matching non-GAAP/companywide wording and dated release URLs.
+    """
+    from app.seed import SEED_CHUNKS, SEED_HOLDINGS
+
+    with TestClient(create_app(_make_settings(tmp_path))) as client:
+        # 1. Primary target before incidental comparison mention
+        r_apple = client.post(
+            "/api/text",
+            json={
+                "transcript": "Preview Apple earnings compared with Insmed",
+                "active_ticker": "NTRA",
+            },
+        )
+        assert r_apple.status_code == 200
+        apple = r_apple.json()
+        assert apple["decision"]["action"] == "earnings_preview"
+        assert apple["decision"]["holding"] is None
+        assert apple["decision"]["requested_company"] == "Apple (AAPL)"
+        assert apple["hud"]["header"] == "PREVIEW · AAPL · WEB"
+
+        # 1b. Target clause after leading comparison clause
+        r_apple2 = client.post(
+            "/api/text",
+            json={
+                "transcript": "Compared with Insmed, preview Apple earnings",
+                "active_ticker": "NTRA",
+            },
+        )
+        assert r_apple2.status_code == 200
+        assert r_apple2.json()["hud"]["header"] == "PREVIEW · AAPL · WEB"
+
+        # 2. Longer/more-specific share class ('Fox Class B') beats shorter higher-weight 'Fox' (FOXA)
+        r_foxb = client.post(
+            "/api/text",
+            json={
+                "transcript": "Preview Fox Class B earnings",
+                "active_ticker": "NTRA",
+            },
+        )
+        assert r_foxb.status_code == 200
+        foxb = r_foxb.json()
+        assert foxb["decision"]["holding"] is None
+        assert foxb["decision"]["requested_company"] == "Fox Corporation — Class B (FOX)"
+        assert foxb["hud"]["header"] == "PREVIEW · FOX (0.8%) · WEB"
+
+        # Bare 'Fox' still resolves to Class A (FOXA 4.3%)
+        r_foxa = client.post(
+            "/api/text",
+            json={
+                "transcript": "Preview Fox earnings",
+                "active_ticker": "NTRA",
+            },
+        )
+        assert r_foxa.status_code == 200
+        assert r_foxa.json()["hud"]["header"] == "PREVIEW · FOXA (4.3%) · WEB"
+
+        # 3. Unsupported peer ('TSMC') in 'Read-across from TSMC to Seagate' must clarify on STX, never STX -> NTRA
+        r_peer_unsup = client.post(
+            "/api/text",
+            json={
+                "transcript": "Read-across from TSMC to Seagate",
+                "active_ticker": "NTRA",
+            },
+        )
+        assert r_peer_unsup.status_code == 200
+        unsup = r_peer_unsup.json()
+        assert unsup["decision"]["action"] == "peer_read_across"
+        assert unsup["decision"]["holding"] == "STX"
+        assert unsup["decision"]["peer_holding"] is None
+        assert unsup["hud"]["header"] == "WORK · PEER READ · STX"
+        assert "TSM" in unsup["hud"]["body"]
+        assert "STX → NTRA" not in unsup["hud"]["header"]
+        assert unsup["suggested_check"] is None
+
+        # 4. Unsupported target ('Insmed') in 'Read-across from Amazon to Insmed' clarifies instead of using NTRA
+        r_target_unsup = client.post(
+            "/api/text",
+            json={
+                "transcript": "Read-across from Amazon to Insmed",
+                "active_ticker": "NTRA",
+            },
+        )
+        assert r_target_unsup.status_code == 200
+        t_unsup = r_target_unsup.json()
+        assert t_unsup["decision"]["holding"] is None
+        assert t_unsup["hud"]["header"] == "WORK · PEER READ · CLARIFY"
+        assert "INSM" in t_unsup["hud"]["body"]
+
+        # 5. Reversed direction 'Read-across to Seagate from Amazon' still maps peer=AMZN, target=STX
+        r_rev = client.post(
+            "/api/text",
+            json={
+                "transcript": "Read-across to Seagate from Amazon",
+                "active_ticker": "NTRA",
+            },
+        )
+        assert r_rev.status_code == 200
+        rev = r_rev.json()
+        assert rev["decision"]["holding"] == "STX"
+        assert rev["decision"]["peer_holding"] == "AMZN"
+        assert rev["hud"]["header"] == "PEER · AMZN → STX"
+
+    # 6. Verify accurate Seagate non-GAAP comparator, Amazon companywide capex wording, and dated release URLs
+    stx_seed = next(h for h in SEED_HOLDINGS if h.ticker == "STX")
+    assert "57.8% (vs 40.1% YoY)" in stx_seed.latest_finding
+    assert "39.4%" not in stx_seed.latest_finding
+
+    amzn_seed = next(h for h in SEED_HOLDINGS if h.ticker == "AMZN")
+    assert "companywide" in amzn_seed.latest_finding.lower()
+
+    for chunk in SEED_CHUNKS:
+        url = chunk["source_url"]
+        assert "news-release" in url or "news-details" in url, f"Expected dated release URL, got {url}"

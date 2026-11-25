@@ -4,9 +4,9 @@ from app.db import CockpitDB, utc_now_iso
 from app.models import HoldingRecord, Verdict
 
 
-NTRA_Q3_PR_URL = "https://www.natera.com/company/news/"
-STX_Q1_PR_URL = "https://investors.seagate.com/"
-AMZN_Q3_PR_URL = "https://ir.aboutamazon.com/"
+NTRA_Q3_PR_URL = "https://investor.natera.com/news-releases/news-release-details/natera-reports-third-quarter-2026-financial-results"
+STX_Q1_PR_URL = "https://investors.seagate.com/news/news-details/2026/Seagate-Technology-Reports-Fiscal-First-Quarter-2027-Financial-Results/default.aspx"
+AMZN_Q3_PR_URL = "https://ir.aboutamazon.com/news-release/news-release-details/2026/Amazon-com-Announces-Third-Quarter-Results/default.aspx"
 
 
 # Verified prior-quarter guidance baselines for deterministic (zero-LLM) earnings_preview skill
@@ -37,7 +37,7 @@ SEED_HOLDINGS: list[HoldingRecord] = [
         saved_question="Is Seagate's HAMR Mozaic ramp sustaining gross margin expansion?",
         verdict=Verdict.AHEAD,
         latest_finding=(
-            "Q1 FY27 rev $4.23B (+61% YoY), non-GAAP GM 57.8% (vs 39.4% YoY). "
+            "Q1 FY27 rev $4.23B (+61% YoY), non-GAAP GM 57.8% (vs 40.1% YoY). "
             "Azure qualified Mozaic HAMR; Q2 rev guided $4.8B."
         ),
         source_citation="STX Q1 FY27 PR · Oct 27",
@@ -47,14 +47,14 @@ SEED_HOLDINGS: list[HoldingRecord] = [
     HoldingRecord(
         ticker="AMZN",
         company="Amazon.com, Inc. (6.9%)",
-        saved_question="Is AWS growth accelerating enough to justify 2026 AI capex?",
+        saved_question="Is AWS growth accelerating enough to justify ~$220B FY26 companywide capex?",
         verdict=Verdict.AHEAD,
         latest_finding=(
             "Q3 AWS rev $46.0B (+39.3% YoY, $184B run rate), op margin 38.7%; "
-            "record $28.1B op inc. FY26 capex reiterated ~$220B."
+            "record $28.1B op inc. Companywide FY26 cash capex reiterated ~$220B."
         ),
         source_citation="AMZN Q3 2026 PR · Oct 29",
-        suggested_next_check="Check whether AWS sustains >35% YoY growth as $220B FY26 AI capex comes online",
+        suggested_next_check="Check whether AWS sustains >35% YoY growth as ~$220B FY26 companywide cash capex ramps",
         next_check="",
     ),
 ]
@@ -134,14 +134,15 @@ SEED_CHUNKS: list[dict[str, str]] = [
         "topic": "revenue gross margin EPS guidance Q2 FY27 pricing profitability",
         "headline": "Q1 FY27 rev $4.23B (+61% YoY); non-GAAP GM 57.8%; Q2 guide $4.8B",
         "summary_card": (
-            "Q1 FY27 rev $4.23B (+61% YoY), non-GAAP GM 57.8% (vs 39.4% YoY). "
+            "Q1 FY27 rev $4.23B (+61% YoY), non-GAAP GM 57.8% (vs 40.1% YoY). "
             "Q2 FY27 guided $4.8B rev and $9.20 EPS."
         ),
         "verdict": Verdict.AHEAD.value,
         "suggested_next_check": "Check whether Q2 FY27 revenue hits $4.8B and non-GAAP GM expands above 57.8%",
         "excerpt": (
             "Seagate reported Q1 FY27 revenue of $4.23 billion (+61% YoY vs $2.63 billion), GAAP gross "
-            "margin of 57.3% (up from 39.4% YoY), non-GAAP gross margin of 57.8%, and non-GAAP EPS of $7.68. "
+            "margin of 57.3% (up from 39.4% YoY), non-GAAP gross margin of 57.8% (up from 40.1% YoY), "
+            "and non-GAAP EPS of $7.68. "
             "Management guided Q2 FY27 revenue to $4.8 billion (+/- $0.1B) and non-GAAP EPS to $9.20 (+/- $0.20)."
         ),
         "source_url": STX_Q1_PR_URL,
@@ -195,17 +196,18 @@ SEED_CHUNKS: list[dict[str, str]] = [
         "doc_date": "2026-10-29",
         "page_ref": "AMZN Q3 2026 Call · Oct 29",
         "topic": "capex capital expenditure AWS AI data center storage infrastructure Q4 guidance cash flow",
-        "headline": "FY26 cash capex reiterated ~$220B for AWS AI data centers; Q4 rev $240-$247B",
+        "headline": "Companywide FY26 cash capex reiterated ~$220B (heavy AWS/AI spend); Q4 rev $240-$247B",
         "summary_card": (
-            "FY26 cash capex reiterated ~$220B mostly for AWS AI data centers "
-            "(TTM FCF -$42.4B); Q4 guide $240-$247B rev, $28.5-$33.5B op inc."
+            "Companywide FY26 cash capex reiterated ~$220B (heavy AWS/AI infra spend; "
+            "TTM FCF -$42.4B); Q4 guide $240-$247B rev, $28.5-$33.5B op inc."
         ),
         "verdict": Verdict.WATCH.value,
-        "suggested_next_check": "Track 2027 AWS data-center capex trajectory and nearline storage pull-through",
+        "suggested_next_check": "Track 2027 Amazon capex trajectory and AWS nearline storage pull-through",
         "excerpt": (
-            "Amazon reiterated full-year 2026 cash capital expenditures of approximately $220 billion, "
-            "overwhelmingly directed toward scaling AWS AI data centers, custom silicon, and cloud storage "
-            "capacity (pushing TTM free cash flow to -$42.4 billion). Q4 2026 net sales were guided to "
+            "Amazon reiterated full-year 2026 companywide cash capital expenditures of approximately $220 billion, "
+            "heavily weighted toward scaling AWS AI infrastructure, custom silicon, and cloud storage "
+            "capacity alongside fulfillment and corporate investments (pushing TTM free cash flow to -$42.4 billion). "
+            "Q4 2026 net sales were guided to "
             "$240.0-$247.0 billion (+12%-16% YoY) with operating income of $28.5-$33.5 billion."
         ),
         "source_url": AMZN_Q3_PR_URL,

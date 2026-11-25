@@ -24,7 +24,7 @@
    - Edit `NTRA`'s `Saved Question` directly in Notion to *"Is Signatera volume and revenue running ahead of full-year guidance?"* and click **`Pull Notion`**.
    - `NOTION | UPDATED` → tap to see the exact same Natera Q3 2026 release flip to `Q3 rev $794.0M (+34% YoY); oncology tests 339.5k (+61% YoY). FY26 guide raised $140M at mid to $3.005-$3.035B.`
 5. **2:15–2:45 · Portfolio-Wide Work Skills (`AMZN → STX`, `INSM 4.2%`, Non-Held Names) + Close**
-   - **`Preview Natera`** (Tier-0 local render `< 5 ms`, zero LLM call; end-to-end spoken flow adds STT + Jev + Notion pull) → **`Peer Read: Amazon → Seagate`** (connects Amazon's `$220B` FY26 AWS AI capex directly to Seagate's `9.1%` HAMR Mozaic holding) → **`Preview Insmed earnings`** (`PREVIEW | INSM (4.2%) | WEB` — shows exact weight from the 61-position portfolio; external names like Alphabet work identically).
+   - **`Preview Natera`** (Tier-0 local render `< 5 ms`, zero LLM call; end-to-end spoken flow adds STT + Jev + Notion pull) → **`Peer Read: Amazon → Seagate`** (connects Amazon's `~$220B` companywide FY26 cash capex guidance, heavily weighted to AWS/AI infrastructure, directly to Seagate's `9.1%` HAMR Mozaic holding) → **`Preview Insmed earnings`** (`PREVIEW | INSM (4.2%) | WEB` — shows exact weight from the 61-position portfolio; external names like Alphabet work identically).
    - Close on safety & stack: Even Hub SDK `0.0.16` (desktop `.ehpk` packed), OpenRouter STT + Jev + DeepSeek Web, Notion 2-way sync; strictly read-only financial inputs and human-confirmed writes only.
 
 ---

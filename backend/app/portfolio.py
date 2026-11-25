@@ -26,7 +26,12 @@ PORTFOLIO_POSITIONS: tuple[PortfolioPosition, ...] = (
     PortfolioPosition("NTRA", "Natera, Inc.", 29.22, ("natera", "signatera")),
     PortfolioPosition("STX", "Seagate Technology Holdings plc", 9.07, ("seagate", "seagate technology", "mozaic", "hamr")),
     PortfolioPosition("AMZN", "Amazon.com, Inc.", 6.86, ("amazon", "aws")),
-    PortfolioPosition("FOXA", "Fox Corporation — Class A", 4.27, ("fox corporation", "fox corp", "fox")),
+    PortfolioPosition(
+        "FOXA",
+        "Fox Corporation — Class A",
+        4.27,
+        ("fox corporation class a", "fox corp class a", "fox class a", "fox corporation", "fox corp", "fox"),
+    ),
     PortfolioPosition("INSM", "Insmed Incorporated", 4.19, ("insmed",)),
     PortfolioPosition("YPF", "YPF S.A.", 3.97, ("ypf",)),
     PortfolioPosition("U", "Unity Software Inc.", 3.62, ("unity software", "unity"), ticker_case_sensitive=True),
@@ -45,7 +50,13 @@ PORTFOLIO_POSITIONS: tuple[PortfolioPosition, ...] = (
     PortfolioPosition("CPNG", "Coupang, Inc.", 0.83, ("coupang",)),
     PortfolioPosition("WDC", "Western Digital Corporation", 0.82, ("western digital",)),
     PortfolioPosition("PURR", "Hyperliquid Strategies Inc.", 0.81, ("hyperliquid strategies", "hyperliquid")),
-    PortfolioPosition("FOX", "Fox Corporation — Class B", 0.80, ("fox class b",), ticker_case_sensitive=True),
+    PortfolioPosition(
+        "FOX",
+        "Fox Corporation — Class B",
+        0.80,
+        ("fox corporation class b", "fox corp class b", "fox class b"),
+        ticker_case_sensitive=True,
+    ),
     PortfolioPosition("FLR", "Fluor Corporation", 0.77, ("fluor",)),
     PortfolioPosition("SKY", "Champion Homes, Inc.", 0.71, ("champion homes", "skyline champion"), ticker_case_sensitive=True),
     PortfolioPosition("APP", "AppLovin Corporation", 0.71, ("applovin",), ticker_case_sensitive=True),
@@ -111,45 +122,63 @@ def lookup_portfolio_position(ticker_or_query: str | None) -> PortfolioPosition 
     return match_portfolio_position_in_text(cleaned)
 
 
+def find_portfolio_mentions_in_text(
+    text: str,
+    *,
+    exclude_tickers: set[str] | None = None,
+) -> list[tuple[int, int, PortfolioPosition]]:
+    """
+    Finds all non-overlapping portfolio holding mentions in free text as (start, end, position)
+    spans, safely avoiding false matches on 1-letter or common-word tickers
+    (U, B, SE, APP, SKY, HUM, FOX, AUR).
+
+    More specific/longer spans (e.g. 'Fox Class B') always beat overlapping shorter spans
+    (e.g. 'Fox' -> FOXA) regardless of portfolio weight.
+    """
+    excluded = {t.upper() for t in (exclude_tickers or set())}
+    lower = text.lower()
+    raw_hits: list[tuple[int, int, PortfolioPosition]] = []
+
+    for pos in PORTFOLIO_POSITIONS:
+        if pos.ticker.upper() in excluded:
+            continue
+        for alias in pos.aliases:
+            for m in re.finditer(rf"\b{re.escape(alias.lower())}\b", lower):
+                raw_hits.append((m.start(), m.end(), pos))
+
+        if pos.ticker_case_sensitive:
+            # Only match explicit cashtag ($U, $APP, $FOX)
+            for m_cash in re.finditer(rf"\${re.escape(pos.ticker)}\b", text):
+                raw_hits.append((m_cash.start(), m_cash.end(), pos))
+        else:
+            for m_tick in re.finditer(rf"\b{re.escape(pos.ticker.lower())}\b", lower):
+                raw_hits.append((m_tick.start(), m_tick.end(), pos))
+
+    if not raw_hits:
+        return []
+
+    # Longest span wins when starting at the same position; otherwise earliest start first
+    raw_hits.sort(key=lambda item: (item[0], -(item[1] - item[0]), -item[2].weight_pct))
+
+    accepted: list[tuple[int, int, PortfolioPosition]] = []
+    for start, end, pos in raw_hits:
+        # Drop any shorter/overlapping span subsumed by a previously accepted span
+        if any(start < acc_end and end > acc_start for acc_start, acc_end, _ in accepted):
+            continue
+        accepted.append((start, end, pos))
+    return accepted
+
+
 def match_portfolio_position_in_text(
     text: str,
     *,
     exclude_tickers: set[str] | None = None,
 ) -> PortfolioPosition | None:
     """
-    Finds the earliest-mentioned portfolio holding in free text, safely avoiding
-    false matches on 1-letter or common-word tickers (U, B, SE, APP, SKY, HUM, FOX, AUR).
+    Finds the earliest, most specific portfolio holding mentioned in free text.
     """
-    excluded = {t.upper() for t in (exclude_tickers or set())}
-    lower = text.lower()
-    hits: list[tuple[int, PortfolioPosition]] = []
-
-    for pos in PORTFOLIO_POSITIONS:
-        if pos.ticker.upper() in excluded:
-            continue
-        positions: list[int] = []
-        for alias in pos.aliases:
-            m = re.search(rf"\b{re.escape(alias.lower())}\b", lower)
-            if m:
-                positions.append(m.start())
-
-        if pos.ticker_case_sensitive:
-            # Only match explicit cashtag ($U, $APP) or uppercase ticker paired with finance noun
-            m_cash = re.search(rf"\${re.escape(pos.ticker)}\b", text)
-            if m_cash:
-                positions.append(m_cash.start())
-        else:
-            m_tick = re.search(rf"\b{re.escape(pos.ticker.lower())}\b", lower)
-            if m_tick:
-                positions.append(m_tick.start())
-
-        if positions:
-            hits.append((min(positions), pos))
-
-    if not hits:
-        return None
-    hits.sort(key=lambda item: (item[0], -item[1].weight_pct))
-    return hits[0][1]
+    mentions = find_portfolio_mentions_in_text(text, exclude_tickers=exclude_tickers)
+    return mentions[0][2] if mentions else None
 
 
 def format_weight_badge(ticker_or_query: str | None) -> str | None:

@@ -22,7 +22,7 @@ Cockpit pairs a **calm default `HOME` screen** (`COCKPIT | READY`) with a **thre
 | *"Preview Natera before earnings"* | **Tier 0** · `Work · EARNINGS_PREVIEW` (indexed core) | **No** | Local render `< 5 ms` from SQLite (`29.2% wt`, `Saved Question`, prior baseline, open `Next Check`); zero LLM call *(spoken flow still includes STT + Jev + optional Notion pull)* |
 | *"Can you please preview Insmed earnings?"* | **Tier 1 + Tier 2 Web** · `Work · EARNINGS_PREVIEW` (portfolio) | **Yes** *(web)* | Recognizes `INSM` from the 61-position book (`PREVIEW \| INSM (4.2%) \| WEB`) + stageable watchpoint; non-held names like Alphabet work identically (`PREVIEW \| GOOGL \| WEB`) |
 | *"Can we review Natera earnings?"* | **Tier 1 + Tier 2** · `Work · BRIEF_HOLDING` | **Yes** | Pulls latest Notion question first, checks real Q3 2026 release via FTS5 + Jev, renders **1 sourced delta card** (`HELD` / `AHEAD` / `WATCH`) |
-| *"What does Amazon capex mean for Seagate?"* | **Tier 1 + Tier 2** · `Work · PEER_READ_ACROSS` | **Yes** | Connects Amazon's real Oct 29 `$220B` FY26 AWS AI capex call to Seagate's HAMR Mozaic nearline thesis + proposes a 2-tap verified `Next Check` |
+| *"What does Amazon capex mean for Seagate?"* | **Tier 1 + Tier 2** · `Work · PEER_READ_ACROSS` | **Yes** | Connects Amazon's real Oct 29 `~$220B` companywide FY26 cash capex guidance (heavily weighted to AWS/AI infrastructure) to Seagate's HAMR Mozaic nearline thesis + proposes a 2-tap verified `Next Check` |
 
 ### Measured Latency: Local Compute vs. End-to-End Live
 We report local compute and network-bound end-to-end timings separately (details in [docs/live-wiring-learnings.md](docs/live-wiring-learnings.md)):
@@ -35,7 +35,7 @@ We report local compute and network-bound end-to-end timings separately (details
 
 ## Signature Work Demo: “One Release, Two Different Glances”
 
-Cockpit indexes real Oct–Nov 2026 primary earnings releases for the portfolio's top three positions — **Natera (`NTRA`, 29.22%)**, **Seagate (`STX`, 9.07%)**, and **Amazon (`AMZN`, 6.86%)** — strictly read-only. Changing the single `Saved Question` on Natera's Notion watchlist row flips the first card rendered from the exact same **Nov 5, 2026 Q3 2026 earnings release**:
+Cockpit indexes real Oct–Nov 2026 primary earnings releases for the portfolio's top three positions — **Natera (`NTRA`, 29.22% — [Q3 2026 Release, Nov 5](https://investor.natera.com/news-releases/news-release-details/natera-reports-third-quarter-2026-financial-results))**, **Seagate (`STX`, 9.07% — [Q1 FY27 Release, Oct 27](https://investors.seagate.com/news/news-details/2026/Seagate-Technology-Reports-Fiscal-First-Quarter-2027-Financial-Results/default.aspx))**, and **Amazon (`AMZN`, 6.86% — [Q3 2026 Release, Oct 29](https://ir.aboutamazon.com/news-release/news-release-details/2026/Amazon-com-Announces-Third-Quarter-Results/default.aspx))** — strictly read-only. Changing the single `Saved Question` on Natera's Notion watchlist row flips the first card rendered from the exact same **Nov 5, 2026 Q3 2026 earnings release**:
 
 | `Saved Question` in Notion (`NTRA · 29.2%`) | What the wearer sees on G2 (`576 × 288`) |
 | :--- | :--- |
@@ -106,7 +106,7 @@ cp .env.example .env
 
 ### 3. Run the Test Suite & Build
 ```bash
-make test       # 33 Python pytest tests + 14 TypeScript Node tests
+make test       # 35 Python pytest tests + 14 TypeScript Node tests
 make build      # tsc --noEmit && vite build
 ```
 

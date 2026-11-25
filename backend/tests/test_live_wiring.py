@@ -183,3 +183,96 @@ def test_notion_setup_helpers_and_env_update(tmp_path: Path) -> None:
     assert "OPENROUTER_API_KEY=keep-me" in text
     assert "NOTION_LOG_DATABASE_ID=log-123" in text
     assert "NOTION_HOLDINGS_DATABASE_ID=hold-456" in text
+
+
+@pytest.mark.asyncio
+async def test_smoke_live_exits_nonzero_on_notion_failures_and_passes_on_valid_checks(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Smoke check must exit non-zero when Notion pull returns 0 rows or write returns page_id=None."""
+    from app.scripts import smoke_live
+    from app.services.notion_sync import NotionHoldingSnapshot
+
+    # Case 1: Unconfigured providers -> exits non-zero
+    monkeypatch.setattr(
+        smoke_live,
+        "Settings",
+        lambda: Settings(
+            cockpit_db_path=str(tmp_path / "smoke1.db"),
+            openrouter_api_key="",
+            notion_token="",
+            notion_log_database_id="",
+            notion_holdings_database_id="",
+        ),
+    )
+    with pytest.raises(SystemExit):
+        await smoke_live.run_smoke(test_notion_write=False)
+
+    # Case 2: Notion configured, pull_holdings returns {} (simulated failure) -> exits non-zero, no ✓ on pull
+    notion_settings = Settings(
+        cockpit_db_path=str(tmp_path / "smoke2.db"),
+        openrouter_api_key="",
+        notion_token="secret-test",
+        notion_log_database_id="log-db-id",
+        notion_holdings_database_id="hold-db-id",
+    )
+    monkeypatch.setattr(smoke_live, "Settings", lambda: notion_settings)
+
+    class FailingPullNotion:
+        def __init__(self, _settings: Settings) -> None:
+            self.enabled = True
+            self.holdings_enabled = True
+
+        async def pull_holdings(self) -> dict:
+            return {}
+
+        async def push_journal_entry(self, _entry) -> str | None:
+            return None
+
+    monkeypatch.setattr(smoke_live, "NotionSync", FailingPullNotion)
+    capsys.readouterr()
+    with pytest.raises(SystemExit):
+        await smoke_live.run_smoke(test_notion_write=False)
+    out = capsys.readouterr().out
+    assert "✗ Pulled 0 holdings" in out
+    assert "✓ Pulled 0" not in out
+
+    # Case 3: Pull succeeds (1 row), but --write returns page_id=None -> exits non-zero, no ✓ on write
+    class FailingWriteNotion:
+        def __init__(self, _settings: Settings) -> None:
+            self.enabled = True
+            self.holdings_enabled = True
+
+        async def pull_holdings(self) -> dict:
+            return {
+                "NTRA": NotionHoldingSnapshot(
+                    ticker="NTRA",
+                    saved_question="Test?",
+                    next_check="",
+                    notion_page_id="page-ntra",
+                )
+            }
+
+        async def push_journal_entry(self, _entry) -> str | None:
+            return None
+
+    monkeypatch.setattr(smoke_live, "NotionSync", FailingWriteNotion)
+    with pytest.raises(SystemExit):
+        await smoke_live.run_smoke(test_notion_write=True)
+    out = capsys.readouterr().out
+    assert "✗ Test write to Cockpit Log failed (page_id=None)" in out
+    assert "✓ Test write to Cockpit Log -> page_id=None" not in out
+
+    # Case 4: Both pull (>=1 row) and --write (valid page_id) succeed -> exits cleanly
+    class PassingNotion(FailingWriteNotion):
+        async def push_journal_entry(self, _entry) -> str | None:
+            return "page-write-ok"
+
+    monkeypatch.setattr(smoke_live, "NotionSync", PassingNotion)
+    await smoke_live.run_smoke(test_notion_write=True)
+    out = capsys.readouterr().out
+    assert "✓ Pulled 1 holding(s)" in out
+    assert "✓ Test write to Cockpit Log -> page_id=page-write-ok" in out
+    assert "Smoke check passed (2 check(s) succeeded, 0 failures)" in out

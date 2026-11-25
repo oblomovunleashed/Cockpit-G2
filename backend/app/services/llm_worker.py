@@ -175,7 +175,7 @@ class LLMWorker:
     ) -> tuple[str, DraftCheck]:
         """
         Cross-company synthesis skill: connects a verified peer filing passage
-        (e.g. Amazon AWS capex / Seagate HAMR supply) to the target holding's saved thesis question.
+        (e.g. Amazon capex / Seagate HAMR supply) to the target holding's saved thesis question.
         """
         fallback_finding, fallback_draft = build_grounded_peer_read_across(
             target=target,

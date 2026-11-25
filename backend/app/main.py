@@ -418,7 +418,34 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         # WORK SKILL 2 (TIER 1 + TIER 2): PEER READ-ACROSS (e.g. AMZN -> STX)
         # --------------------------------------------------------------
         if decision.action == ActionType.PEER_READ_ACROSS:
-            target_ticker = (decision.holding or active_ticker or (tickers[0] if tickers else "STX")).upper()
+            raw_target = decision.holding
+            if not raw_target and decision.requested_company is None:
+                raw_target = active_ticker
+
+            if not raw_target:
+                indexed_list = ", ".join(tickers)
+                unsupported_label = decision.requested_company or "that company"
+                if "(" in unsupported_label and unsupported_label.endswith(")"):
+                    unsupported_label = unsupported_label.split("(")[-1].rstrip(")")
+                hud = HudCard(
+                    header="WORK · PEER READ · CLARIFY",
+                    body=_clip(
+                        f"{unsupported_label} isn't in indexed peer filings ({indexed_list}). "
+                        f"Ask for an indexed pair or preview {unsupported_label} on web.",
+                        240,
+                    ),
+                    footer="Hold: e.g. 'What does Amazon capex mean for Seagate?'",
+                )
+                return UtteranceResponse(
+                    transcript=transcript,
+                    decision=decision,
+                    hud=hud,
+                    holding=None,
+                    pending_write=None,
+                    suggested_check=None,
+                )
+
+            target_ticker = raw_target.upper()
             target_holding = await refresh_holding_from_notion(target_ticker) or db.get_holding(target_ticker)
             if target_holding is None:
                 raise HTTPException(status_code=404, detail=f"Holding not found: {target_ticker}")
@@ -426,9 +453,19 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             peer_ticker = (decision.peer_holding or "").upper()
             if not peer_ticker or peer_ticker == target_ticker or db.get_holding(peer_ticker) is None:
                 peers = ", ".join(t for t in tickers if t != target_ticker)
+                if decision.requested_company:
+                    peer_label = decision.requested_company
+                    if "(" in peer_label and peer_label.endswith(")"):
+                        peer_label = peer_label.split("(")[-1].rstrip(")")
+                    body = (
+                        f"{peer_label} isn't in indexed peer filings for {target_ticker} "
+                        f"(indexed peers: {peers}). Ask for an indexed peer or preview {peer_label} on web."
+                    )
+                else:
+                    body = f"Specify a peer to read across to {target_ticker} (available: {peers})."
                 hud = HudCard(
                     header=_clip(f"WORK · PEER READ · {target_ticker}", 60),
-                    body=_clip(f"Specify a peer to read across to {target_ticker} (available: {peers}).", 240),
+                    body=_clip(body, 240),
                     footer="Hold: e.g. 'What does Amazon capex mean for Seagate?'",
                 )
                 return UtteranceResponse(

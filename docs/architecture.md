@@ -56,7 +56,7 @@ Cockpit boots and rests on **`HOME` (`COCKPIT | READY`)** — never forcing a Wo
 
 ### Stage 3 — System-2 Work Skills (`services/retrieval.py` + `services/jev_router.py` + `services/llm_worker.py`)
 1. **Indexed core holdings (`NTRA`, `STX`, `AMZN`):** Pulls latest Notion `Saved Question` first → retrieves candidates via SQLite FTS5 → uses Jev (`is_answered` + `best_chunk` + `verdict`, with all candidate passages placed in `state`) → synthesizes `<= 190`-char sourced card via `deepseek/deepseek-v4.1-flash-1017` (or returns `No matching passage` with `verdict: null`).
-2. **Peer read-across (`AMZN → STX`):** Connects verified Amazon AWS AI data-center capex passages (`$220B` FY26 capex, `+39.3%` AWS growth) to Seagate's HAMR Mozaic nearline thesis and proposes a stageable check.
+2. **Peer read-across (`AMZN → STX`):** Connects verified Amazon companywide FY26 cash capex passages (`~$220B` guided, heavily weighted toward AWS/AI infrastructure; `+39.3%` AWS growth) to Seagate's HAMR Mozaic nearline thesis and proposes a stageable check. Unsupported peer pairs return an explicit clarification card rather than silently swapping companies.
 3. **Any-company web preview & review (other 58 portfolio holdings or external names):** When Jev routes `holding = untracked`, `synthesize_adhoc_earnings()` runs a date-aware OpenRouter web-grounded call (`plugins: [{"id": "web", "max_results": 3}]`), stamps portfolio weight when held (`INSM (4.2%)`), strips markdown links for LVGL clarity, and returns a stageable watchpoint.
 
 ### Stage 4 — Confirmed Writes, Partial Failure Semantics, Undo & Async Enrichment (`db.py` + `notion_sync.py` + `job_runner.py`)

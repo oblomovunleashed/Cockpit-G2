@@ -14,9 +14,13 @@ import {
 } from './hud';
 import {
   dispatchEvenHubEvent,
+  executePullNotionAction,
   executeSwipeAction,
   executeTapAction,
   nextViewModeFromUtterance,
+  startBridgeCapture,
+  stopBridgeCapture,
+  type BridgeCaptureState,
 } from './input';
 import { activeHolding, createInitialState, holdingToCard, type CockpitState } from './state';
 import type { ConfirmWriteResponse, HudCard, JevDecision, JournalEntry, Mind } from './types';
@@ -29,11 +33,25 @@ const recorder = new PcmAudioRecorder();
 const browserMic = new BrowserMicRecorder();
 const state: CockpitState = createInitialState();
 
-let activeMicKind: 'bridge' | 'browser' | null = null;
+const captureState: BridgeCaptureState = { activeMicKind: null };
 let enrichmentPollTimer: number | null = null;
 
 function isAnyMicRecording(): boolean {
-  return recorder.isActive || browserMic.isActive;
+  return captureState.activeMicKind !== null || recorder.isActive || browserMic.isActive;
+}
+
+async function discardPendingWriteIfAny(): Promise<void> {
+  const pending = state.pendingWrite;
+  state.pendingWrite = null;
+  state.suggestedCheck = null;
+  state.lastSavedEntry = null;
+  if (pending) {
+    try {
+      await api.cancelWrite(pending.id);
+    } catch {
+      // Best-effort cancel; local pending state is already cleared.
+    }
+  }
 }
 
 let bridge: EvenAppBridge | null = null;
@@ -236,7 +254,7 @@ async function submitTextUtterance(transcript: string): Promise<void> {
   if (!clean) return;
 
   stopEnrichmentPoll();
-  state.lastSavedEntry = null;
+  await discardPendingWriteIfAny();
   state.mode = 'PROCESSING';
   await showCard({
     header: 'COCKPIT · JEV ROUTING',
@@ -376,31 +394,26 @@ async function handleDoubleTap(): Promise<void> {
 }
 
 async function startVoiceCapture(): Promise<void> {
-  if (state.mode === 'PROCESSING' || isAnyMicRecording()) return;
-  stopEnrichmentPoll();
-  activeMicKind = 'bridge';
-  state.mode = 'LISTENING';
-  setMicButtonLabel(true, 'G2/Sim');
-  await showCard({
-    header: 'COCKPIT · [REC] LISTENING',
-    body: 'Speak a note, task, or earnings question.\nRelease when finished.',
-    footer: 'Release to transcribe via OpenRouter',
+  const outcome = await startBridgeCapture(state, captureState, {
+    recorder,
+    bridge,
+    source: AudioInputSource.Glasses,
+    isOtherMicActive: () => browserMic.isActive,
+    setMicLabel: setMicButtonLabel,
+    showCard,
+    onBeforeStart: stopEnrichmentPoll,
+    onAudioReady: (wavBlob) => routeWavBlob(wavBlob, 'G2/Simulator'),
   });
-  const started = await recorder.start(bridge, AudioInputSource.Glasses);
-  if (!started) {
-    activeMicKind = null;
-    setMicButtonLabel(false);
-    if (state.mode === 'LISTENING') {
-      state.mode = 'BRIEFING';
-      await showCard(holdingToCard(state));
-    }
+  if (outcome === 'failed' && state.mode === 'LISTENING') {
+    state.mode = 'BRIEFING';
+    await showCard(holdingToCard(state));
   }
 }
 
 async function routeWavBlob(wavBlob: Blob | null, sourceLabel: string): Promise<void> {
   if (!wavBlob) {
+    await discardPendingWriteIfAny();
     state.mode = 'SAVED';
-    state.lastSavedEntry = null;
     await showCard({
       header: 'COCKPIT · NO AUDIO',
       body: `No ${sourceLabel} mic frames received. Hold the button for 1-2s while speaking and check macOS Microphone permission.`,
@@ -409,6 +422,7 @@ async function routeWavBlob(wavBlob: Blob | null, sourceLabel: string): Promise<
     return;
   }
 
+  await discardPendingWriteIfAny();
   state.mode = 'PROCESSING';
   await showCard({
     header: 'COCKPIT · TRANSCRIBING',
@@ -445,45 +459,43 @@ async function routeWavBlob(wavBlob: Blob | null, sourceLabel: string): Promise<
 }
 
 async function stopVoiceCaptureAndRoute(): Promise<void> {
-  if (!recorder.isActive) return;
-  const wasListening = state.mode === 'LISTENING';
-  activeMicKind = null;
-  setMicButtonLabel(false);
-  const wavBlob = await recorder.stop(bridge);
-  if (!wavBlob && !wasListening) {
-    return;
-  }
-  await routeWavBlob(wavBlob, 'G2/Simulator');
+  await stopBridgeCapture(state, captureState, {
+    recorder,
+    bridge,
+    setMicLabel: setMicButtonLabel,
+    showCard,
+    onAudioReady: (wavBlob) => routeWavBlob(wavBlob, 'G2/Simulator'),
+  });
 }
 
 async function startUnifiedMicButtonCapture(): Promise<void> {
   if (state.mode === 'PROCESSING' || isAnyMicRecording()) return;
-  stopEnrichmentPoll();
 
   // Prefer native Even Hub Bridge audioControl when running inside Simulator or G2 glasses!
   if (bridge) {
-    activeMicKind = 'bridge';
-    setMicButtonLabel(true, 'G2/Sim');
-    state.mode = 'LISTENING';
-    await showCard({
-      header: 'COCKPIT · [REC] LISTENING',
-      body: 'Listening via Even Hub mic...\nHold while speaking, release to send.',
-      footer: 'Release to transcribe via OpenRouter',
+    const outcome = await startBridgeCapture(state, captureState, {
+      recorder,
+      bridge,
+      source: AudioInputSource.Glasses,
+      isOtherMicActive: () => browserMic.isActive,
+      setMicLabel: setMicButtonLabel,
+      showCard,
+      onBeforeStart: stopEnrichmentPoll,
+      onAudioReady: (wavBlob) => routeWavBlob(wavBlob, 'G2/Simulator'),
+      listeningBody: 'Listening via Even Hub mic...\nHold while speaking, release to send.',
     });
-    const ok = await recorder.start(bridge, AudioInputSource.Glasses);
-    if (ok) return;
-    // If cancelled while starting, do not fall back
-    if (activeMicKind === null) return;
-    activeMicKind = null;
-    setMicButtonLabel(false);
+    if (outcome === 'started' || outcome === 'cancelled' || outcome === 'ignored') {
+      return;
+    }
   }
 
   // Fallback for standalone browser preview (http://127.0.0.1:5173 in Chrome/Safari)
-  activeMicKind = 'browser';
+  stopEnrichmentPoll();
+  captureState.activeMicKind = 'browser';
   try {
     const started = await browserMic.start();
-    if (!started) {
-      activeMicKind = null;
+    if (!started || captureState.activeMicKind !== 'browser') {
+      captureState.activeMicKind = null;
       setMicButtonLabel(false);
       return;
     }
@@ -495,10 +507,10 @@ async function startUnifiedMicButtonCapture(): Promise<void> {
       footer: 'Release to transcribe via OpenRouter',
     });
   } catch (err) {
-    activeMicKind = null;
+    captureState.activeMicKind = null;
     setMicButtonLabel(false);
+    await discardPendingWriteIfAny();
     state.mode = 'SAVED';
-    state.lastSavedEntry = null;
     await showCard({
       header: 'COCKPIT · MIC ERROR',
       body: err instanceof Error ? err.message : 'Could not open microphone.',
@@ -508,17 +520,27 @@ async function startUnifiedMicButtonCapture(): Promise<void> {
 }
 
 async function stopUnifiedMicButtonAndRoute(): Promise<void> {
-  if (activeMicKind === 'bridge' || recorder.isActive) {
+  if (captureState.activeMicKind === 'bridge' || recorder.isActive) {
     await stopVoiceCaptureAndRoute();
     return;
   }
-  if (!browserMic.isActive) return;
+  if (!browserMic.isActive && captureState.activeMicKind !== 'browser') return;
+  const wasPreStart = browserMic.isStarting && !browserMic.isRecording;
   const wasListening = state.mode === 'LISTENING';
-  activeMicKind = null;
+  captureState.activeMicKind = null;
   setMicButtonLabel(false);
   const wavBlob = await browserMic.stop();
-  if (!wavBlob && !wasListening) {
-    return;
+  if (!wavBlob) {
+    if (wasPreStart) {
+      if (wasListening) {
+        state.mode = 'BRIEFING';
+        await showCard(holdingToCard(state));
+      }
+      return;
+    }
+    if (!wasListening) {
+      return;
+    }
   }
   await routeWavBlob(wavBlob, 'browser');
 }
@@ -532,7 +554,7 @@ function handleEvenHubEvent(event: EvenHubEvent): void {
       } else if (itemId === MENU_ITEM_NEXT_HOLDING) {
         void handleSwipe(1);
       } else if (itemId === MENU_ITEM_REFRESH) {
-        void refreshDeck(true);
+        void discardPendingWriteIfAny().then(() => refreshDeck(true));
       }
     },
     onLongPress: () => void startVoiceCapture(),
@@ -545,38 +567,15 @@ function handleEvenHubEvent(event: EvenHubEvent): void {
 }
 
 async function handlePullNotion(): Promise<void> {
-  if (state.mode === 'PROCESSING' || isAnyMicRecording()) return;
-  state.mode = 'PROCESSING';
-  await showCard({
-    header: 'COCKPIT · SYNCING NOTION',
-    body: 'Pulling updated questions from Holdings Watchlist...',
-    footer: 'Please wait...',
+  await executePullNotionAction(state, {
+    isRecording: () => isAnyMicRecording(),
+    cancelWrite: (pendingId) => api.cancelWrite(pendingId),
+    pullNotion: () => api.pullNotion(),
+    refreshDeckAfterPull: () => refreshDeck(false),
+    showCard,
+    onBeforeSync: stopEnrichmentPoll,
   });
-  try {
-    const res = await api.pullNotion();
-    await refreshDeck(false);
-    if (res.recomputed.length > 0) {
-      const idx = state.holdings.findIndex((h) => h.ticker === res.recomputed[0]);
-      if (idx >= 0) state.holdingIndex = idx;
-      state.mode = 'SAVED';
-      state.lastSavedEntry = null;
-      await showCard({
-        header: 'NOTION · UPDATED',
-        body: `Refreshed ${res.recomputed.join(', ')} from edited Saved Question in Notion.`,
-        footer: 'Tap: view updated card · Swipe: next',
-      });
-    } else {
-      state.mode = 'BRIEFING';
-      await showCard(holdingToCard(state));
-    }
-  } catch (err) {
-    state.mode = 'BRIEFING';
-    await showCard({
-      header: 'NOTION · SYNC ERROR',
-      body: err instanceof Error ? err.message : 'Failed to pull Notion watchlist.',
-      footer: 'Swipe: deck',
-    });
-  }
+  updatePendingControls();
 }
 
 function wireCompanionControls(): void {
@@ -637,6 +636,9 @@ function wireCompanionControls(): void {
   });
 
   document.getElementById('btn-flip')?.addEventListener('click', async () => {
+    if (state.mode === 'PROCESSING' || isAnyMicRecording()) return;
+    stopEnrichmentPoll();
+    await discardPendingWriteIfAny();
     const nvda = state.holdings.find((h) => h.ticker === 'NVDA');
     const nextQ = nvda?.saved_question === NVDA_MARGIN_Q ? NVDA_REVENUE_Q : NVDA_MARGIN_Q;
     const updated = await api.updateHoldingQuestion('NVDA', nextQ);
@@ -645,9 +647,6 @@ function wireCompanionControls(): void {
       state.holdings[idx] = updated.holding;
       state.holdingIndex = idx;
     }
-    state.pendingWrite = null;
-    state.suggestedCheck = null;
-    state.lastSavedEntry = null;
     state.mode = 'BRIEFING';
     await showCard(updated.hud);
   });

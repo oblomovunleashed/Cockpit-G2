@@ -10,10 +10,14 @@ import { BrowserMicRecorder, PcmAudioRecorder } from '../src/audio.ts';
 import { sanitizeLine } from '../src/hud.ts';
 import {
   dispatchEvenHubEvent,
+  executePullNotionAction,
   executeSwipeAction,
   executeTapAction,
   nextViewModeFromUtterance,
   resolveGestureEventType,
+  startBridgeCapture,
+  stopBridgeCapture,
+  type BridgeCaptureState,
   type SwipeActionDeps,
   type TapActionDeps,
 } from '../src/input.ts';
@@ -724,4 +728,207 @@ test('sanitizeLine replaces unsupported LVGL firmware glyphs cleanly', () => {
   assert.equal(out.includes('\u2192'), false);
   assert.equal(out.includes('\u25CF'), false);
   assert.equal(out, 'OK: PEER | TSM -> NVDA [REC] ...');
+});
+
+test('releasing mic while showCard is awaiting cancels capture before audioControl opens', async () => {
+  let releaseShowCard!: () => void;
+  let cardCalls = 0;
+  const renderedCards: HudCard[] = [];
+  const audioControlCalls: boolean[] = [];
+
+  const fakeBridge = {
+    audioControl: async (isOpen: boolean) => {
+      audioControlCalls.push(isOpen);
+      return true;
+    },
+  } as unknown as import('@evenrealities/even_hub_sdk').EvenAppBridge;
+
+  const recorder = new PcmAudioRecorder();
+  const capture: BridgeCaptureState = { activeMicKind: null };
+  const state = makeState({
+    mode: 'BRIEFING',
+    holdings: [
+      {
+        ticker: 'NVDA',
+        company: 'NVIDIA Corp.',
+        saved_question: 'Does NVIDIA expect the margin trough to get deeper?',
+        verdict: 'HELD',
+        latest_finding: 'Q4 FY27 gross margin guide 71-72%.',
+        source_citation: 'Q3 FY27 PR',
+        suggested_next_check: 'Check price hikes',
+        next_check: '',
+        notion_page_id: null,
+        updated_at: '2026-11-25T00:00:00Z',
+      },
+    ],
+  });
+
+  let labelActive = false;
+  let audioReadyCalls = 0;
+  const showCard = async (card: HudCard): Promise<void> => {
+    renderedCards.push(card);
+    cardCalls += 1;
+    if (cardCalls === 1) {
+      await new Promise<void>((resolve) => {
+        releaseShowCard = resolve;
+      });
+    }
+  };
+
+  // Press mic button -> blocks inside first showCard() BEFORE bridge.audioControl(true)
+  const startPromise = startBridgeCapture(state, capture, {
+    recorder,
+    bridge: fakeBridge,
+    isOtherMicActive: () => false,
+    setMicLabel: (recording) => {
+      labelActive = recording;
+    },
+    showCard,
+    onAudioReady: async () => {
+      audioReadyCalls += 1;
+    },
+  });
+
+  // Immediately active before showCard resolves
+  assert.equal(recorder.isActive, true);
+  assert.equal(recorder.isStarting, true);
+  assert.equal(capture.activeMicKind, 'bridge');
+  assert.equal(labelActive, true);
+
+  // Release mic button WHILE showCard() is still awaiting bridge updates
+  await stopBridgeCapture(state, capture, {
+    recorder,
+    bridge: fakeBridge,
+    setMicLabel: (recording) => {
+      labelActive = recording;
+    },
+    showCard,
+    onAudioReady: async () => {
+      audioReadyCalls += 1;
+    },
+  });
+
+  // Now let the first showCard() resolve
+  releaseShowCard();
+  const outcome = await startPromise;
+
+  assert.equal(outcome, 'cancelled');
+  assert.deepEqual(audioControlCalls, []); // audioControl(true) was NEVER opened!
+  assert.equal(recorder.isActive, false);
+  assert.equal(recorder.isRecording, false);
+  assert.equal(capture.activeMicKind, null);
+  assert.equal(labelActive, false);
+  assert.equal(audioReadyCalls, 0);
+  assert.equal(state.mode, 'BRIEFING');
+  assert.match(renderedCards.at(-1)?.header ?? '', /NVDA/);
+});
+
+test('Pull Notion while CONFIRM card is open clears and cancels pending write before deck taps', async () => {
+  const nvda = {
+    ticker: 'NVDA',
+    company: 'NVIDIA Corp.',
+    saved_question: "Is revenue running ahead of management's guidance?",
+    verdict: 'AHEAD' as const,
+    latest_finding: 'Q3 FY27 revenue $115.8bn (+7% vs $108bn guide).',
+    source_citation: 'Q3 FY27 PR',
+    suggested_next_check: 'Track Blackwell rack shipments',
+    next_check: '',
+    notion_page_id: 'page-nvda',
+    updated_at: '2026-11-25T12:00:00Z',
+  };
+
+  // Case 1: Pull Notion with recomputed banner -> dismiss -> tap deck must NOT confirm old pending write
+  const state = makeState({
+    mode: 'CONFIRM_WRITE',
+    holdings: [nvda],
+    pendingWrite: {
+      id: 'pending-stale-1',
+      mind: 'interests',
+      kind: 'note',
+      content: 'Old unconfirmed note',
+      ticker: null,
+      source_citation: null,
+      updates_next_check: false,
+    },
+  });
+
+  const cancelledIds: string[] = [];
+  const rendered: HudCard[] = [];
+  await executePullNotionAction(state, {
+    isRecording: () => false,
+    cancelWrite: async (id) => {
+      cancelledIds.push(id);
+    },
+    pullNotion: async () => ({ pulled_count: 3, recomputed: ['NVDA'] }),
+    refreshDeckAfterPull: async () => {},
+    showCard: async (card) => {
+      rendered.push(card);
+    },
+  });
+
+  assert.deepEqual(cancelledIds, ['pending-stale-1']);
+  assert.equal(state.pendingWrite, null);
+  assert.equal(state.mode, 'SAVED');
+  assert.equal(rendered.at(-1)?.header, 'NOTION · UPDATED');
+
+  // Tap 1 dismisses NOTION · UPDATED banner back to BRIEFING deck
+  let confirmCalls = 0;
+  let stageSuggestedCalls = 0;
+  const tapDeps: TapActionDeps = {
+    isRecording: () => false,
+    getActiveHolding: (s) => s.holdings[0] ?? null,
+    confirmWrite: async () => {
+      confirmCalls += 1;
+      throw new Error('stale pending write must never be confirmed');
+    },
+    stageCheck: async () => {
+      throw new Error('unexpected');
+    },
+    stageSuggestedCheck: async (ticker) => {
+      stageSuggestedCalls += 1;
+      return {
+        pending_write: {
+          id: 'new-check-1',
+          mind: 'work',
+          kind: 'check',
+          content: nvda.suggested_next_check,
+          ticker,
+          source_citation: nvda.source_citation,
+          updates_next_check: true,
+        },
+        hud: {
+          header: 'WORK · NVDA · CONFIRM CHECK',
+          body: nvda.suggested_next_check,
+          footer: 'Tap: save · Swipe: switch mind · 2x: cancel',
+        },
+      };
+    },
+    refreshDeckAfterSave: async () => {},
+    showCard: async () => {},
+  };
+
+  await executeTapAction(state, tapDeps);
+  assert.equal(state.mode, 'BRIEFING');
+  assert.equal(confirmCalls, 0);
+
+  // Tap 2 on BRIEFING deck previews NVDA's check instead of saving old unconfirmed note
+  await executeTapAction(state, tapDeps);
+  assert.equal(confirmCalls, 0);
+  assert.equal(stageSuggestedCalls, 1);
+  assert.equal(state.mode, 'CONFIRM_WRITE');
+  assert.equal(state.pendingWrite?.id, 'new-check-1');
+
+  // Case 2: Pull Notion with no recomputed changes directly returns to BRIEFING with pending cleared
+  await executePullNotionAction(state, {
+    isRecording: () => false,
+    cancelWrite: async (id) => {
+      cancelledIds.push(id);
+    },
+    pullNotion: async () => ({ pulled_count: 3, recomputed: [] }),
+    refreshDeckAfterPull: async () => {},
+    showCard: async () => {},
+  });
+  assert.deepEqual(cancelledIds, ['pending-stale-1', 'new-check-1']);
+  assert.equal(state.pendingWrite, null);
+  assert.equal(state.mode, 'BRIEFING');
 });

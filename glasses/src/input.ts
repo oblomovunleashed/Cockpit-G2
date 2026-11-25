@@ -1,4 +1,10 @@
-import { OsEventTypeList, type EvenHubEvent } from '@evenrealities/even_hub_sdk';
+import {
+  AudioInputSource,
+  OsEventTypeList,
+  type EvenAppBridge,
+  type EvenHubEvent,
+} from '@evenrealities/even_hub_sdk';
+import type { PcmAudioRecorder } from './audio.ts';
 import { holdingToCard, nextMindTarget, type CockpitState, type ViewMode } from './state.ts';
 import type {
   ConfirmWriteResponse,
@@ -43,6 +49,43 @@ export interface SwipeActionDeps {
   undoJournalEntry: (entryId: number) => Promise<UndoWriteResponse>;
   refreshDeckAfterChange: () => Promise<void>;
   showCard: (card: HudCard) => Promise<void>;
+}
+
+export interface PullNotionDeps {
+  isRecording: () => boolean;
+  cancelWrite: (pendingId: string) => Promise<void>;
+  pullNotion: () => Promise<{ pulled_count: number; recomputed: string[] }>;
+  refreshDeckAfterPull: () => Promise<void>;
+  showCard: (card: HudCard) => Promise<void>;
+  onBeforeSync?: () => void;
+}
+
+export interface BridgeCaptureState {
+  activeMicKind: 'bridge' | 'browser' | null;
+}
+
+export interface BridgeCaptureDeps {
+  recorder: Pick<
+    PcmAudioRecorder,
+    'isActive' | 'isStarting' | 'isRecording' | 'beginStart' | 'isSessionCurrent' | 'start' | 'stop'
+  >;
+  bridge: EvenAppBridge | null;
+  source?: AudioInputSource;
+  isOtherMicActive: () => boolean;
+  setMicLabel: (recording: boolean, sourceLabel?: string) => void;
+  showCard: (card: HudCard) => Promise<void>;
+  onBeforeStart?: () => void;
+  onAudioReady: (wavBlob: Blob | null) => Promise<void>;
+  listeningBody?: string;
+}
+
+function pendingToConfirmCard(pending: PendingWrite): HudCard {
+  const tickerPart = pending.ticker ? ` · ${pending.ticker}` : '';
+  return {
+    header: `${pending.mind.toUpperCase()}${tickerPart} · CONFIRM ${pending.kind.toUpperCase()}`,
+    body: pending.content,
+    footer: 'Tap: save · Swipe: switch mind · 2x: cancel',
+  };
 }
 
 /**
@@ -297,4 +340,154 @@ export async function executeSwipeAction(
     state.mode = 'BRIEFING';
     await deps.showCard(holdingToCard(state));
   }
+}
+
+/**
+ * Pulls updated questions from Notion and updates the deck.
+ * Always clears and cancels any staged pending confirmation BEFORE leaving CONFIRM_WRITE
+ * so a subsequent tap on the deck can never accidentally commit an old unseen entry.
+ */
+export async function executePullNotionAction(
+  state: CockpitState,
+  deps: PullNotionDeps,
+): Promise<void> {
+  if (state.mode === 'PROCESSING' || deps.isRecording()) return;
+
+  const pendingToCancel = state.pendingWrite;
+  state.pendingWrite = null;
+  state.suggestedCheck = null;
+  state.lastSavedEntry = null;
+  deps.onBeforeSync?.();
+  if (pendingToCancel) {
+    try {
+      await deps.cancelWrite(pendingToCancel.id);
+    } catch {
+      // Best-effort cancel; local pending state is already cleared.
+    }
+  }
+
+  state.mode = 'PROCESSING';
+  await deps.showCard({
+    header: 'COCKPIT · SYNCING NOTION',
+    body: 'Pulling updated questions from Holdings Watchlist...',
+    footer: 'Please wait...',
+  });
+
+  try {
+    const res = await deps.pullNotion();
+    await deps.refreshDeckAfterPull();
+    if (res.recomputed.length > 0) {
+      const idx = state.holdings.findIndex((h) => h.ticker === res.recomputed[0]);
+      if (idx >= 0) state.holdingIndex = idx;
+      state.mode = 'SAVED';
+      state.lastSavedEntry = null;
+      await deps.showCard({
+        header: 'NOTION · UPDATED',
+        body: `Refreshed ${res.recomputed.join(', ')} from edited Saved Question in Notion.`,
+        footer: 'Tap: view updated card · Swipe: next',
+      });
+    } else {
+      state.mode = 'BRIEFING';
+      await deps.showCard(holdingToCard(state));
+    }
+  } catch (err) {
+    state.mode = 'BRIEFING';
+    await deps.showCard({
+      header: 'NOTION · SYNC ERROR',
+      body: err instanceof Error ? err.message : 'Failed to pull Notion watchlist.',
+      footer: 'Swipe: deck',
+    });
+  }
+}
+
+/**
+ * Starts native Even Hub bridge PCM capture, marking the session active BEFORE awaiting
+ * HUD rendering so a release arriving mid-render cancels startup cleanly.
+ */
+export async function startBridgeCapture(
+  state: CockpitState,
+  capture: BridgeCaptureState,
+  deps: BridgeCaptureDeps,
+): Promise<'started' | 'cancelled' | 'failed' | 'ignored'> {
+  if (
+    state.mode === 'PROCESSING' ||
+    capture.activeMicKind !== null ||
+    deps.recorder.isActive ||
+    deps.isOtherMicActive()
+  ) {
+    return 'ignored';
+  }
+  deps.onBeforeStart?.();
+
+  const token = deps.recorder.beginStart();
+  capture.activeMicKind = 'bridge';
+  state.mode = 'LISTENING';
+  deps.setMicLabel(true, 'G2/Sim');
+
+  await deps.showCard({
+    header: 'COCKPIT · [REC] LISTENING',
+    body:
+      deps.listeningBody ?? 'Speak a note, task, or earnings question.\nRelease when finished.',
+    footer: 'Release to transcribe via OpenRouter',
+  });
+
+  if (!deps.recorder.isSessionCurrent(token)) {
+    return 'cancelled';
+  }
+
+  const started = await deps.recorder.start(
+    deps.bridge,
+    deps.source ?? AudioInputSource.Glasses,
+    token,
+  );
+  if (started) {
+    return 'started';
+  }
+
+  if (!deps.recorder.isSessionCurrent(token)) {
+    return 'cancelled';
+  }
+
+  capture.activeMicKind = null;
+  deps.setMicLabel(false);
+  return 'failed';
+}
+
+export async function stopBridgeCapture(
+  state: CockpitState,
+  capture: BridgeCaptureState,
+  deps: Pick<
+    BridgeCaptureDeps,
+    'recorder' | 'bridge' | 'setMicLabel' | 'showCard' | 'onAudioReady'
+  >,
+): Promise<void> {
+  if (capture.activeMicKind !== 'bridge' && !deps.recorder.isActive) {
+    return;
+  }
+
+  const wasPreStart = deps.recorder.isStarting && !deps.recorder.isRecording;
+  const wasListening = state.mode === 'LISTENING';
+  capture.activeMicKind = null;
+  deps.setMicLabel(false);
+
+  const wavBlob = await deps.recorder.stop(deps.bridge);
+  if (!wavBlob) {
+    if (wasPreStart) {
+      if (wasListening) {
+        if (state.pendingWrite) {
+          state.mode = 'CONFIRM_WRITE';
+          await deps.showCard(pendingToConfirmCard(state.pendingWrite));
+        } else {
+          state.mode = 'BRIEFING';
+          await deps.showCard(holdingToCard(state));
+        }
+      }
+      return;
+    }
+    if (!wasListening) {
+      return;
+    }
+  }
+
+  await deps.onAudioReady(wavBlob);
 }

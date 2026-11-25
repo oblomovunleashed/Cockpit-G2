@@ -17,6 +17,7 @@ export class PcmAudioRecorder {
   private recording = false;
   private starting = false;
   private cancelRequested = false;
+  private audioOpened = false;
   private sessionSeq = 0;
 
   get isRecording(): boolean {
@@ -35,15 +36,33 @@ export class PcmAudioRecorder {
     return this.totalBytes;
   }
 
-  async start(
-    bridge: EvenAppBridge | null,
-    source: AudioInputSource = AudioInputSource.Glasses,
-  ): Promise<boolean> {
+  /**
+   * Synchronously marks a capture session as pending BEFORE any async HUD render
+   * or bridge `audioControl` await so a release arriving mid-render cancels startup.
+   */
+  beginStart(): number {
     const token = ++this.sessionSeq;
     this.chunks = [];
     this.totalBytes = 0;
     this.starting = true;
     this.cancelRequested = false;
+    this.audioOpened = false;
+    return token;
+  }
+
+  isSessionCurrent(token: number): boolean {
+    return !this.cancelRequested && token === this.sessionSeq;
+  }
+
+  async start(
+    bridge: EvenAppBridge | null,
+    source: AudioInputSource = AudioInputSource.Glasses,
+    existingToken?: number,
+  ): Promise<boolean> {
+    const token = existingToken ?? this.beginStart();
+    if (!this.isSessionCurrent(token)) {
+      return false;
+    }
 
     let opened = true;
     if (bridge) {
@@ -54,7 +73,7 @@ export class PcmAudioRecorder {
       }
     }
 
-    if (this.cancelRequested || token !== this.sessionSeq) {
+    if (!this.isSessionCurrent(token)) {
       if (opened && bridge) {
         try {
           await bridge.audioControl(false);
@@ -72,8 +91,10 @@ export class PcmAudioRecorder {
     this.starting = false;
     if (!opened) {
       this.recording = false;
+      this.audioOpened = false;
       return false;
     }
+    this.audioOpened = true;
     this.recording = true;
     return true;
   }
@@ -91,11 +112,12 @@ export class PcmAudioRecorder {
     this.cancelRequested = true;
     this.sessionSeq += 1;
 
-    const wasActive = this.recording || this.starting;
+    const shouldCloseBridge = this.audioOpened;
     this.recording = false;
     this.starting = false;
+    this.audioOpened = false;
 
-    if (wasActive && bridge) {
+    if (shouldCloseBridge && bridge) {
       try {
         await bridge.audioControl(false);
       } catch {

@@ -24,6 +24,7 @@ const CONTAINER_FOOTER_ID = 3;
 export class G2HudRenderer {
   private initialized = false;
   private lastCard: HudCard | null = null;
+  private renderQueue: Promise<void> = Promise.resolve();
   private readonly bridge: EvenAppBridge | null;
 
   constructor(bridge: EvenAppBridge | null) {
@@ -107,6 +108,12 @@ export class G2HudRenderer {
   }
 
   async render(card: HudCard): Promise<void> {
+    const next = this.renderQueue.then(() => this.renderSerialized(card));
+    this.renderQueue = next.catch(() => {});
+    return next;
+  }
+
+  private async renderSerialized(card: HudCard): Promise<void> {
     const safe = sanitizeCard(card);
     if (!this.initialized) {
       await this.init(safe);

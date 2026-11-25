@@ -29,6 +29,9 @@ class Verdict(str, Enum):
     PENDING = "PENDING"
 
 
+EnrichmentStatus = Literal["none", "pending", "enriched", "needs_detail", "failed"]
+
+
 class HudCard(BaseModel):
     """Exact 3-container payload rendered onto the Even G2 576x288 lens."""
 
@@ -42,7 +45,9 @@ class JevDecision(BaseModel):
     action: ActionType
     holding: str | None = None
     peer_holding: str | None = None
+    requested_company: str | None = None
     needs_llm_worker: bool = False
+    needs_enrichment: bool = False
     confidence: float = Field(default=1.0, ge=0.0, le=1.0)
     mode: Literal["openrouter", "mock"] = "mock"
     reasoning: str | None = None
@@ -84,6 +89,10 @@ class JournalEntry(BaseModel):
     ticker: str | None = None
     source_citation: str | None = None
     notion_page_id: str | None = None
+    enrichment_status: EnrichmentStatus = "none"
+    enriched_summary: str = ""
+    enriched_url: str = ""
+    due_date: str | None = None
     created_at: str
 
 
@@ -95,6 +104,13 @@ class PendingWrite(BaseModel):
     ticker: str | None = None
     source_citation: str | None = None
     updates_next_check: bool = False
+    needs_enrichment: bool = False
+
+
+class UpdatePendingWriteRequest(BaseModel):
+    mind: Mind
+    kind: Literal["note", "task", "check"] | None = None
+    ticker: str | None = None
 
 
 class DraftCheck(BaseModel):
@@ -134,6 +150,14 @@ class ConfirmWriteResponse(BaseModel):
     entry: JournalEntry
     holding: HoldingRecord | None = None
     synced_to_notion: bool = False
+    enrichment_queued: bool = False
+    hud: HudCard
+
+
+class UndoWriteResponse(BaseModel):
+    undone_id: int
+    archived_in_notion: bool = False
+    holding: HoldingRecord | None = None
     hud: HudCard
 
 

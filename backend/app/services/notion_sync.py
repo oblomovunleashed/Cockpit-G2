@@ -5,12 +5,20 @@ from dataclasses import dataclass
 import httpx
 
 from app.config import Settings
-from app.models import HoldingRecord, JournalEntry
+from app.models import EnrichmentStatus, HoldingRecord, JournalEntry
 
 logger = logging.getLogger(__name__)
 
 NOTION_API_BASE = "https://api.notion.com/v1"
 NOTION_VERSION = "2022-06-28"
+
+ENRICHMENT_SELECT_LABELS: dict[EnrichmentStatus, str] = {
+    "none": "None",
+    "pending": "Pending",
+    "enriched": "Enriched",
+    "needs_detail": "Needs Detail",
+    "failed": "Failed",
+}
 
 
 @dataclass(frozen=True)
@@ -25,14 +33,16 @@ class NotionSync:
     """
     Live Notion integration for Track 4 (AI Assistants & Work).
     - Pushes confirmed journal writes (Personal / Interests / Work) into `Cockpit Log`.
-    - Syncs saved thesis questions & next-quarter checks with `Holdings Watchlist`.
-    - Uses surgical PATCH updates on existing pages so briefing recomputes never
-      overwrite newer user-edited Saved Question or Next Check values in Notion.
-    Gracefully no-ops when NOTION_TOKEN is unset so local/mock mode works immediately.
+    - Upgrades `Cockpit Log` idempotently with enrichment columns (`Enriched`, `Due Date`,
+      `Link`, `Enrichment`) and patches rows in place when background enrichment completes.
+    - Supports clean Undo via `archive_page()` (`archived: true`).
+    - Syncs saved thesis questions & next-quarter checks with `Holdings Watchlist` using
+      surgical PATCH updates so user edits in Notion are never clobbered.
     """
 
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
+        self._log_schema_ensured = False
 
     @property
     def enabled(self) -> bool:
@@ -52,37 +62,159 @@ class NotionSync:
             "Content-Type": "application/json",
         }
 
+    async def ensure_log_enrichment_schema(self) -> bool:
+        """
+        Idempotently ensures `Cockpit Log` has the optional enrichment columns
+        (`Enriched`, `Due Date`, `Link`, `Enrichment`) without touching existing data.
+        """
+        if not self.enabled:
+            return False
+        if self._log_schema_ensured:
+            return True
+
+        patch_payload = {
+            "properties": {
+                "Enriched": {"rich_text": {}},
+                "Due Date": {"date": {}},
+                "Link": {"url": {}},
+                "Enrichment": {
+                    "select": {
+                        "options": [
+                            {"name": "None", "color": "gray"},
+                            {"name": "Pending", "color": "yellow"},
+                            {"name": "Enriched", "color": "green"},
+                            {"name": "Needs Detail", "color": "orange"},
+                            {"name": "Failed", "color": "red"},
+                        ]
+                    }
+                },
+            }
+        }
+        try:
+            async with httpx.AsyncClient(timeout=12.0) as client:
+                resp = await client.patch(
+                    f"{NOTION_API_BASE}/databases/{self.settings.notion_log_database_id}",
+                    headers=self._headers(),
+                    json=patch_payload,
+                )
+                resp.raise_for_status()
+            self._log_schema_ensured = True
+            return True
+        except Exception as exc:
+            logger.warning("Notion Cockpit Log schema upgrade skipped: %s", exc)
+            return False
+
     async def push_journal_entry(self, entry: JournalEntry) -> str | None:
         if not self.enabled:
             return None
 
-        properties: dict = {
+        schema_ready = await self.ensure_log_enrichment_schema()
+
+        base_properties: dict = {
             "Entry": {"title": [{"text": {"content": entry.content[:2000]}}]},
             "Mind": {"select": {"name": entry.mind.value.capitalize()}},
             "Kind": {"select": {"name": entry.kind.capitalize()}},
             "Logged At": {"date": {"start": entry.created_at}},
         }
         if entry.ticker:
-            properties["Ticker"] = {"rich_text": [{"text": {"content": entry.ticker}}]}
+            base_properties["Ticker"] = {"rich_text": [{"text": {"content": entry.ticker}}]}
         if entry.source_citation:
-            properties["Source"] = {"rich_text": [{"text": {"content": entry.source_citation[:2000]}}]}
+            base_properties["Source"] = {"rich_text": [{"text": {"content": entry.source_citation[:2000]}}]}
 
-        payload = {
-            "parent": {"database_id": self.settings.notion_log_database_id},
-            "properties": properties,
-        }
+        properties = dict(base_properties)
+        if schema_ready:
+            properties["Enrichment"] = {
+                "select": {"name": ENRICHMENT_SELECT_LABELS.get(entry.enrichment_status, "None")}
+            }
+            if entry.enriched_summary:
+                properties["Enriched"] = {
+                    "rich_text": [{"text": {"content": entry.enriched_summary[:2000]}}]
+                }
+            if entry.enriched_url:
+                properties["Link"] = {"url": entry.enriched_url[:2000]}
+            if entry.due_date:
+                properties["Due Date"] = {"date": {"start": entry.due_date}}
+
         try:
             async with httpx.AsyncClient(timeout=12.0) as client:
                 resp = await client.post(
                     f"{NOTION_API_BASE}/pages",
                     headers=self._headers(),
-                    json=payload,
+                    json={
+                        "parent": {"database_id": self.settings.notion_log_database_id},
+                        "properties": properties,
+                    },
                 )
+                if resp.is_error and schema_ready:
+                    # Retry with core properties if database schema rejected optional columns
+                    resp = await client.post(
+                        f"{NOTION_API_BASE}/pages",
+                        headers=self._headers(),
+                        json={
+                            "parent": {"database_id": self.settings.notion_log_database_id},
+                            "properties": base_properties,
+                        },
+                    )
                 resp.raise_for_status()
                 return str(resp.json().get("id", "")) or None
         except Exception as exc:
             logger.warning("Notion journal push failed (SQLite write preserved): %s", exc)
             return None
+
+    async def update_journal_enrichment(
+        self,
+        notion_page_id: str,
+        *,
+        status: EnrichmentStatus,
+        enriched_summary: str,
+        enriched_url: str = "",
+        due_date: str | None = None,
+    ) -> bool:
+        """Patches an existing Cockpit Log page in place with background enrichment details."""
+        if not self.enabled or not notion_page_id:
+            return False
+        schema_ready = await self.ensure_log_enrichment_schema()
+        if not schema_ready:
+            return False
+
+        properties: dict = {
+            "Enrichment": {"select": {"name": ENRICHMENT_SELECT_LABELS.get(status, "Enriched")}},
+            "Enriched": {"rich_text": [{"text": {"content": enriched_summary[:2000]}}]},
+        }
+        if enriched_url:
+            properties["Link"] = {"url": enriched_url[:2000]}
+        if due_date:
+            properties["Due Date"] = {"date": {"start": due_date}}
+
+        try:
+            async with httpx.AsyncClient(timeout=12.0) as client:
+                resp = await client.patch(
+                    f"{NOTION_API_BASE}/pages/{notion_page_id}",
+                    headers=self._headers(),
+                    json={"properties": properties},
+                )
+                resp.raise_for_status()
+            return True
+        except Exception as exc:
+            logger.warning("Notion journal enrichment PATCH failed for %s: %s", notion_page_id, exc)
+            return False
+
+    async def archive_page(self, notion_page_id: str) -> bool:
+        """Archives (soft-deletes) a Notion page on Undo."""
+        if not self.enabled or not notion_page_id:
+            return False
+        try:
+            async with httpx.AsyncClient(timeout=12.0) as client:
+                resp = await client.patch(
+                    f"{NOTION_API_BASE}/pages/{notion_page_id}",
+                    headers=self._headers(),
+                    json={"archived": True},
+                )
+                resp.raise_for_status()
+            return True
+        except Exception as exc:
+            logger.warning("Notion page archive failed for %s: %s", notion_page_id, exc)
+            return False
 
     async def sync_holding_update(
         self,

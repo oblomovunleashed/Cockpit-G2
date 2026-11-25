@@ -9,6 +9,85 @@ from app.models import ActionType, DocumentChunk, JevDecision, Mind, Verdict
 from app.services.retrieval import extract_content_tokens
 
 
+TRACKED_ALIASES: dict[str, tuple[str, ...]] = {
+    "NVDA": ("nvda", "nvidia"),
+    "MSFT": ("msft", "microsoft", "azure"),
+    "TSM": ("tsm", "tsmc", "taiwan semiconductor"),
+}
+
+# Common non-watchlist public/private companies so explicit mentions never silently hijack active_ticker
+KNOWN_UNTRACKED_COMPANIES: dict[str, str] = {
+    "alphabet": "Alphabet (GOOGL)",
+    "google": "Alphabet (GOOGL)",
+    "googl": "Alphabet (GOOGL)",
+    "goog": "Alphabet (GOOGL)",
+    "apple": "Apple (AAPL)",
+    "aapl": "Apple (AAPL)",
+    "amazon": "Amazon (AMZN)",
+    "amzn": "Amazon (AMZN)",
+    "meta": "Meta Platforms (META)",
+    "facebook": "Meta Platforms (META)",
+    "tesla": "Tesla (TSLA)",
+    "tsla": "Tesla (TSLA)",
+    "amd": "AMD",
+    "broadcom": "Broadcom (AVGO)",
+    "avgo": "Broadcom (AVGO)",
+    "netflix": "Netflix (NFLX)",
+    "nflx": "Netflix (NFLX)",
+    "asml": "ASML",
+    "intel": "Intel (INTC)",
+    "intc": "Intel (INTC)",
+    "oracle": "Oracle (ORCL)",
+    "orcl": "Oracle (ORCL)",
+    "salesforce": "Salesforce (CRM)",
+    "palantir": "Palantir (PLTR)",
+    "pltr": "Palantir (PLTR)",
+    "uber": "Uber (UBER)",
+    "spotify": "Spotify (SPOT)",
+    "novo nordisk": "Novo Nordisk (NVO)",
+    "eli lilly": "Eli Lilly (LLY)",
+    "jpmorgan": "JPMorgan Chase (JPM)",
+    "berkshire": "Berkshire Hathaway (BRK.B)",
+    "costco": "Costco (COST)",
+    "walmart": "Walmart (WMT)",
+    "disney": "Disney (DIS)",
+    "sony": "Sony (SONY)",
+    "samsung": "Samsung Electronics",
+    "alibaba": "Alibaba (BABA)",
+    "arm": "Arm Holdings (ARM)",
+    "micron": "Micron (MU)",
+    "qualcomm": "Qualcomm (QCOM)",
+    "qcom": "Qualcomm (QCOM)",
+    "snowflake": "Snowflake (SNOW)",
+    "datadog": "Datadog (DDOG)",
+    "cloudflare": "Cloudflare (NET)",
+    "shopify": "Shopify (SHOP)",
+    "stripe": "Stripe",
+}
+
+_STOP_COMPANY_WORDS = {
+    "a", "an", "the", "this", "that", "these", "those", "my", "our", "your", "their",
+    "please", "can", "could", "would", "you", "we", "me", "us", "to", "for", "of",
+    "on", "in", "at", "about", "before", "after", "next", "last", "latest", "upcoming",
+    "recent", "current", "one", "holding", "company", "stock", "name", "earnings",
+    "preview", "review", "brief", "check", "update", "results", "quarter", "print",
+    "call", "guidance", "margin", "margins", "revenue", "what", "how", "why", "did",
+    "do", "does", "is", "are", "was", "were", "changed",
+}
+
+_RELATIVE_DATE_RE = re.compile(
+    r"\b(tomorrow|tonight|today|yesterday|this weekend|next week|next month|"
+    r"(?:this|next)\s+(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday)|"
+    r"in\s+\d+\s+(?:day|days|week|weeks))\b",
+    re.IGNORECASE,
+)
+
+_ENRICH_MEDIA_RE = re.compile(
+    r"\b(podcast|episode|latest|book|article|essay|newsletter|interview|documentary|movie|film|paper|talk)\b",
+    re.IGNORECASE,
+)
+
+
 def _extract_noul_probability(answer: dict | None, default: float) -> float:
     """OpenRouter Decisions API returns `probability` for noul questions (legacy: `noul`)."""
     if not isinstance(answer, dict):
@@ -34,14 +113,26 @@ def _parse_enum(enum_cls, raw: object, default):
     return default
 
 
+def heuristic_needs_enrichment(transcript: str, mind: Mind) -> bool:
+    """Deterministic fallback trigger for post-confirm background enrichment."""
+    lower = transcript.lower().strip()
+    if mind == Mind.PERSONAL:
+        return bool(_RELATIVE_DATE_RE.search(lower))
+    if mind == Mind.INTERESTS:
+        return bool(_ENRICH_MEDIA_RE.search(lower))
+    return False
+
+
 class JevRouter:
     """
     System-1 decision router backed by TypeSafe Jev on OpenRouter
     (POST https://openrouter.ai/api/alpha/decisions).
 
     Decides fast, typed routing on every utterance:
-      - Fast path ("logged, logged"): Personal task or Interests note -> NO LLM worker.
-      - Deep path ("llm worker"): Work earnings brief or source follow-up -> wakes Work worker.
+      - Fast path ("logged, logged"): Personal task or Interests note -> NO blocking LLM on glasses
+        (optional async post-confirm enrichment when Jev flags `needs_enrichment`).
+      - Deep path ("llm worker"): Work thesis review, follow-up, peer read-across, or ad-hoc
+        earnings preview/review for any non-watchlist company -> wakes System-2 worker.
     Includes a deterministic local fallback when COCKPIT_MOCK_MODE=true or no API key is set.
     """
 
@@ -53,6 +144,7 @@ class JevRouter:
         transcript: str,
         *,
         available_tickers: list[str],
+        available_holdings: dict[str, str] | None = None,
         active_ticker: str | None = None,
     ) -> JevDecision:
         if not self.settings.live_openrouter_enabled:
@@ -62,13 +154,35 @@ class JevRouter:
                 active_ticker=active_ticker,
             )
 
-        ticker_criteria = {t: f"The user is referring to {t} earnings or research." for t in available_tickers}
-        ticker_criteria["none"] = "No specific holding is referenced."
+        holdings_map = available_holdings or {}
+        ticker_criteria: dict[str, str] = {}
+        tracked_display: list[str] = []
+        for t in available_tickers:
+            company = holdings_map.get(t.upper(), "")
+            label = f"{t.upper()} ({company})" if company else t.upper()
+            tracked_display.append(label)
+            ticker_criteria[t] = f"The wearer explicitly referred to {label} earnings or research."
+
+        ticker_criteria["untracked"] = (
+            "The wearer explicitly named a company or stock ticker that is NOT in the tracked watchlist "
+            "(for example Alphabet/Google, Apple, Amazon, Meta, Tesla, AMD, ASML, Broadcom, etc.)."
+        )
+        ticker_criteria["implicit_active"] = (
+            "The wearer did NOT name any company and is referring implicitly to the currently displayed holding "
+            "(for example 'what changed?', 'preview this one', 'what did management say about margins?')."
+        )
+        ticker_criteria["none"] = "Not about any company or stock."
+
+        peer_criteria = {
+            t: f"The peer/source company being read from is {holdings_map.get(t.upper(), t.upper())}."
+            for t in available_tickers
+        }
+        peer_criteria["none"] = "No peer company or not a peer read-across."
 
         state_lines = [
             f"Utterance: {transcript}",
             f"Currently displayed holding on glasses: {active_ticker or 'none'}",
-            f"Tracked portfolio tickers: {', '.join(available_tickers)}",
+            f"Tracked watchlist holdings: {', '.join(tracked_display) if tracked_display else 'none'}",
         ]
         payload = {
             "model": self.settings.openrouter_jev_model,
@@ -78,8 +192,8 @@ class JevRouter:
                     "type": "choice",
                     "instructions": "Which Cockpit mind owns this utterance?",
                     "criteria": {
-                        "work": "Investing, earnings, portfolio holdings, revenue, margins, filings, or research checks.",
-                        "personal": "Personal errands, gifts, reminders, errands, family, appointments, or chores.",
+                        "work": "Investing, earnings, companies, stocks, revenue, margins, filings, or research checks.",
+                        "personal": "Personal errands, gifts, reminders, family, appointments, or chores.",
                         "interests": "Podcasts, books, articles, ideas, films, or general thoughts worth noting.",
                     },
                 },
@@ -87,21 +201,22 @@ class JevRouter:
                     "type": "choice",
                     "instructions": "Which Cockpit skill or action should handle this utterance?",
                     "criteria": {
-                        "log_note": "Save a short personal or interests reflection, podcast/book reaction, or general thought without calling an LLM.",
-                        "log_task": "Save a short personal reminder, errand, gift, or to-do task without calling an LLM.",
-                        "earnings_preview": "Pre-earnings setup or checklist BEFORE a print: show what the wearer is watching, saved question, and prior guidance baseline (e.g. 'preview NVIDIA earnings', 'what am I watching on TSMC?'). Does NOT need an LLM.",
-                        "brief_holding": "Post-earnings thesis review for a single holding: open or refresh the earnings delta card (e.g. 'review NVIDIA earnings', 'what changed?'), NOT a pre-earnings preview or cross-company read-across.",
+                        "log_note": "Save a short personal or interests reflection, podcast/book reaction, or general thought without blocking on an LLM.",
+                        "log_task": "Save a short personal reminder, errand, gift, or to-do task without blocking on an LLM.",
+                        "earnings_preview": "Pre-earnings setup, preview, or checklist BEFORE a print for ANY company (held or not held), e.g. 'preview NVIDIA earnings', 'preview Alphabet earnings', 'what am I watching on TSMC?'.",
+                        "brief_holding": "Post-earnings thesis review or earnings summary for ANY company (held or not held), e.g. 'review NVIDIA earnings', 'review Apple earnings', 'what changed?'.",
                         "follow_up_source": "Ask a specific factual follow-up question about one company's metric, driver, margin recovery, management comment, or outlook.",
                         "peer_read_across": "Cross-company read-across comparing one company's filing/results against another holding's thesis (e.g. 'read-across from TSMC to NVIDIA', 'what does Microsoft capex mean for NVIDIA?').",
                         "draft_next_check": "Explicitly dictate a watch item or question to check at the next earnings call or next quarter.",
-                        "clarify": "The utterance is genuinely ambiguous and needs a quick tap clarification.",
+                        "clarify": "The utterance is genuinely ambiguous and needs clarification.",
                     },
                 },
                 "holding": {
                     "type": "choice",
                     "instructions": (
-                        "Which primary/target portfolio ticker is this utterance about? "
-                        "For peer read-across (e.g. 'from TSMC to NVIDIA'), pick the TARGET ticker (NVIDIA)."
+                        "Which target company is this utterance about? Pick a tracked ticker ONLY if the wearer "
+                        "explicitly named that tracked company. Pick 'untracked' if the wearer named a DIFFERENT "
+                        "company (e.g. Alphabet, Apple, Meta). Pick 'implicit_active' ONLY if no company was named."
                     ),
                     "criteria": ticker_criteria,
                 },
@@ -111,14 +226,22 @@ class JevRouter:
                         "Only for cross-company peer read-across: which PEER/SOURCE ticker is being read from "
                         "(e.g. in 'read-across from TSMC to NVIDIA', pick TSM)? Otherwise pick 'none'."
                     ),
-                    "criteria": ticker_criteria,
+                    "criteria": peer_criteria,
                 },
                 "needs_llm_worker": {
                     "type": "noul",
                     "instructions": (
-                        "Does this request require running the System-2 LLM synthesis worker (true for thesis review, "
-                        "source follow-up, or peer read-across), or can deterministic code handle it with zero LLM "
-                        "(false for fast logs, drafts, and pre-earnings previews)?"
+                        "Does this request need the System-2 LLM worker on screen right now (true for thesis review, "
+                        "source follow-up, peer read-across, or preview/review of an untracked company; false for "
+                        "fast logs, dictated checks, and tracked-holding pre-earnings previews)?"
+                    ),
+                },
+                "needs_enrichment": {
+                    "type": "noul",
+                    "instructions": (
+                        "If this is a note or task being logged, does it reference a podcast, episode, book, "
+                        "article, film, or relative date ('latest', 'next Friday', 'tomorrow') that a background "
+                        "worker should resolve after saving? False for plain standalone reminders like 'buy milk'."
                     ),
                 },
             },
@@ -134,58 +257,90 @@ class JevRouter:
         holding_ans = answers.get("holding", {})
         peer_ans = answers.get("peer_holding", {})
         worker_ans = answers.get("needs_llm_worker", {})
+        enrich_ans = answers.get("needs_enrichment", {})
 
         mind = _parse_enum(Mind, mind_ans.get("choice"), Mind.INTERESTS)
         action = _parse_enum(ActionType, action_ans.get("choice"), ActionType.LOG_NOTE)
         raw_holding = str(holding_ans.get("choice", "none")).strip()
-        holding = None if raw_holding.lower() == "none" else raw_holding.upper()
         raw_peer = str(peer_ans.get("choice", "none")).strip()
         peer_holding = None if raw_peer.lower() == "none" else raw_peer.upper()
+
+        worker_prob = _extract_noul_probability(worker_ans, 0.0)
+        enrich_prob = _extract_noul_probability(enrich_ans, 0.0)
+
+        holding: str | None = None
+        requested_company: str | None = None
 
         if mind != Mind.WORK:
             holding = None
             peer_holding = None
+            requested_company = None
         else:
-            if holding is None and active_ticker:
-                holding = active_ticker.upper()
+            explicit_tracked = self._detect_explicit_tickers(transcript.lower(), available_tickers)
+            untracked_extracted = self.extract_requested_company(transcript, available_tickers)
+
+            if raw_holding.lower() == "untracked" or (untracked_extracted and not explicit_tracked):
+                # Never silently hijack an explicitly named non-watchlist company with active_ticker!
+                holding = None
+                requested_company = untracked_extracted or self._fallback_company_phrase(transcript)
+            elif raw_holding.lower() in ("implicit_active", "none"):
+                if explicit_tracked:
+                    holding = explicit_tracked[0]
+                elif active_ticker:
+                    holding = active_ticker.upper()
+            else:
+                holding = raw_holding.upper()
+
             if action != ActionType.PEER_READ_ACROSS:
                 peer_holding = None
             elif peer_holding == holding:
-                # If user asked "read-across from TSMC" while viewing NVDA, disambiguate target vs peer
                 if active_ticker and active_ticker.upper() != holding:
                     peer_holding = holding
                     holding = active_ticker.upper()
                 else:
                     peer_holding = None
 
-        worker_prob = _extract_noul_probability(worker_ans, 0.0)
+        is_adhoc_company = mind == Mind.WORK and holding is None and requested_company is not None
         no_llm_actions = (
             ActionType.LOG_NOTE,
             ActionType.LOG_TASK,
             ActionType.DRAFT_NEXT_CHECK,
-            ActionType.EARNINGS_PREVIEW,
         )
         llm_actions = (
             ActionType.BRIEF_HOLDING,
             ActionType.FOLLOW_UP_SOURCE,
             ActionType.PEER_READ_ACROSS,
         )
-        needs_worker = (
-            action in llm_actions
-            or (mind == Mind.WORK and worker_prob >= 0.55 and action not in no_llm_actions)
+        if action == ActionType.EARNINGS_PREVIEW:
+            # Tracked holding preview is Tier-0 zero-LLM; untracked company preview uses web LLM worker.
+            needs_worker = is_adhoc_company
+        else:
+            needs_worker = (
+                is_adhoc_company
+                or action in llm_actions
+                or (mind == Mind.WORK and worker_prob >= 0.55 and action not in no_llm_actions)
+            )
+
+        is_fast_log = action in (ActionType.LOG_NOTE, ActionType.LOG_TASK)
+        needs_enrichment = is_fast_log and (
+            enrich_prob >= 0.55 or heuristic_needs_enrichment(transcript, mind)
         )
+
         confidence = float(action_ans.get("confidence", mind_ans.get("confidence", 0.9)))
         cost_part = f", ${float(cost):.6f}" if isinstance(cost, (int, float)) else ""
+        enrich_part = f", enrich_p={enrich_prob:.2f}" if is_fast_log else ""
 
         return JevDecision(
             mind=mind,
             action=action,
             holding=holding,
             peer_holding=peer_holding,
+            requested_company=requested_company,
             needs_llm_worker=needs_worker,
+            needs_enrichment=needs_enrichment,
             confidence=min(max(confidence, 0.0), 1.0),
             mode="openrouter",
-            reasoning=f"Jev ({resolved_model}, {latency_ms}ms, worker_p={worker_prob:.2f}{cost_part})",
+            reasoning=f"Jev ({resolved_model}, {latency_ms}ms, worker_p={worker_prob:.2f}{enrich_part}{cost_part})",
         )
 
     async def select_best_chunk(
@@ -280,20 +435,15 @@ class JevRouter:
         return data, elapsed_ms
 
     # ------------------------------------------------------------------
-    # Deterministic local fallback (mock mode / offline tests)
+    # Entity detection helpers & deterministic local fallback
     # ------------------------------------------------------------------
 
     @staticmethod
     def _detect_explicit_tickers(lower: str, available_tickers: list[str]) -> list[str]:
-        """Returns explicitly mentioned tickers ordered by first appearance in the utterance."""
-        aliases = {
-            "NVDA": ("nvda", "nvidia"),
-            "MSFT": ("msft", "microsoft", "azure"),
-            "TSM": ("tsm", "tsmc"),
-        }
+        """Returns explicitly mentioned tracked tickers ordered by first appearance in the utterance."""
         hits: list[tuple[int, str]] = []
         for ticker in available_tickers:
-            names = aliases.get(ticker.upper(), (ticker.lower(),))
+            names = TRACKED_ALIASES.get(ticker.upper(), (ticker.lower(),))
             positions = [
                 m.start()
                 for name in names
@@ -303,6 +453,62 @@ class JevRouter:
                 hits.append((min(positions), ticker.upper()))
         hits.sort(key=lambda item: item[0])
         return [ticker for _, ticker in hits]
+
+    @classmethod
+    def extract_requested_company(cls, transcript: str, available_tickers: list[str]) -> str | None:
+        """
+        Detects an explicitly named non-watchlist company (e.g. 'Alphabet', 'Apple', 'ASML')
+        so requests like 'Can you please preview Alphabet earnings?' NEVER default to NVDA.
+        """
+        lower = transcript.lower()
+        tracked_names: set[str] = set()
+        for t in available_tickers:
+            tracked_names.add(t.lower())
+            tracked_names.update(TRACKED_ALIASES.get(t.upper(), ()))
+
+        # 1. Known untracked public/private companies (ordered by earliest mention)
+        known_hits: list[tuple[int, str]] = []
+        for alias, display in KNOWN_UNTRACKED_COMPANIES.items():
+            if alias in tracked_names:
+                continue
+            m = re.search(rf"\b{re.escape(alias)}\b", lower)
+            if m:
+                known_hits.append((m.start(), display))
+        if known_hits:
+            known_hits.sort(key=lambda item: item[0])
+            return known_hits[0][1]
+
+        # 2. Pattern extraction around 'preview/review <Company> earnings' or '<Company> earnings'
+        patterns = (
+            r"\b(?:preview|review|brief|check)\s+(?:on\s+|for\s+)?([A-Za-z0-9&.\- ]{2,32}?)\s+(?:before\s+)?(?:earnings|results|quarter|print)\b",
+            r"\b([A-Z][A-Za-z0-9&.\-]*(?:\s+[A-Z][A-Za-z0-9&.\-]*)?)\s+(?:earnings|results|quarter|print)\b",
+            r"\b(?:preview|review)\s+(?:earnings\s+(?:for|of|on)\s+)([A-Za-z0-9&.\- ]{2,32})",
+        )
+        for pat in patterns:
+            m = re.search(pat, transcript, flags=re.IGNORECASE if pat.startswith(r"\b(?:preview") else 0)
+            if not m:
+                continue
+            candidate = m.group(1).strip(" ?.,!'\"")
+            words = [w for w in candidate.split() if w.lower() not in _STOP_COMPANY_WORDS]
+            if not words:
+                continue
+            cleaned = " ".join(words)
+            if cleaned.lower() in tracked_names:
+                return None
+            if any(w.lower() in tracked_names for w in words):
+                return None
+            return cleaned
+
+        return None
+
+    @staticmethod
+    def _fallback_company_phrase(transcript: str) -> str:
+        words = [
+            w.strip("?.,!'\"")
+            for w in transcript.split()
+            if w.strip("?.,!'\"") and w.strip("?.,!'\" ").lower() not in _STOP_COMPANY_WORDS
+        ]
+        return " ".join(words[:4]) or transcript.strip()[:40]
 
     @classmethod
     def _detect_explicit_ticker(cls, lower: str, available_tickers: list[str]) -> str | None:
@@ -325,6 +531,7 @@ class JevRouter:
                 action=ActionType.LOG_TASK,
                 holding=None,
                 needs_llm_worker=False,
+                needs_enrichment=heuristic_needs_enrichment(transcript, Mind.PERSONAL),
                 confidence=0.96,
                 mode="mock",
                 reasoning="Fast-path personal task detected (no LLM worker).",
@@ -337,6 +544,7 @@ class JevRouter:
                 action=ActionType.LOG_NOTE,
                 holding=None,
                 needs_llm_worker=False,
+                needs_enrichment=heuristic_needs_enrichment(transcript, Mind.INTERESTS),
                 confidence=0.95,
                 mode="mock",
                 reasoning="Fast-path interests note detected (no LLM worker).",
@@ -344,7 +552,12 @@ class JevRouter:
 
         explicit_tickers = self._detect_explicit_tickers(lower, available_tickers)
         explicit_ticker = explicit_tickers[0] if explicit_tickers else None
-        resolved_ticker = explicit_ticker or active_ticker or (available_tickers[0] if available_tickers else None)
+        untracked_company = None if explicit_ticker else self.extract_requested_company(transcript, available_tickers)
+        resolved_ticker = (
+            None
+            if untracked_company
+            else (explicit_ticker or (active_ticker.upper() if active_ticker else None))
+        )
 
         # Peer read-across ("read-across from TSMC to NVIDIA", "what does Microsoft mean for NVIDIA")
         if any(kw in lower for kw in ("read-across", "read across", "peer read", "cross-read", "cross read", "mean for")):
@@ -366,16 +579,22 @@ class JevRouter:
                 reasoning=f"Work peer_read_across skill ({peer_t} -> {target_t}) routes to System-2 synthesis.",
             )
 
-        # Pre-earnings preview (Tier 0 deterministic — NO LLM worker!)
+        # Pre-earnings preview (Tier 0 zero-LLM for tracked holdings; web worker for non-watchlist companies)
         if any(kw in lower for kw in ("preview", "before earnings", "pre-call", "pre call", "what am i watching", "baseline")):
+            is_untracked = untracked_company is not None
             return JevDecision(
                 mind=Mind.WORK,
                 action=ActionType.EARNINGS_PREVIEW,
                 holding=resolved_ticker,
-                needs_llm_worker=False,
+                requested_company=untracked_company,
+                needs_llm_worker=is_untracked,
                 confidence=0.95,
                 mode="mock",
-                reasoning="Deterministic earnings_preview skill (zero LLM).",
+                reasoning=(
+                    f"Ad-hoc web earnings_preview for {untracked_company}."
+                    if is_untracked
+                    else "Deterministic earnings_preview skill (zero LLM)."
+                ),
             )
 
         # Next-quarter check dictation ("At the next call, check whether those price increases are on schedule")
@@ -384,6 +603,7 @@ class JevRouter:
                 mind=Mind.WORK,
                 action=ActionType.DRAFT_NEXT_CHECK,
                 holding=resolved_ticker,
+                requested_company=untracked_company,
                 needs_llm_worker=False,
                 confidence=0.94,
                 mode="mock",
@@ -396,23 +616,32 @@ class JevRouter:
                 mind=Mind.WORK,
                 action=ActionType.FOLLOW_UP_SOURCE,
                 holding=resolved_ticker,
+                requested_company=untracked_company,
                 needs_llm_worker=True,
                 confidence=0.93,
                 mode="mock",
                 reasoning="Work follow-up question requires source retrieval + worker.",
             )
 
-        # Earnings / holdings review ("Can we review NVIDIA earnings?", "What changed?")
-        # Only explicit ticker mentions or work keywords trigger Work — display context alone does not.
-        if any(kw in lower for kw in ("earning", "review", "what changed", "holding", "guidance", "margin", "revenue")) or explicit_ticker is not None:
+        # Earnings / holdings review ("Can we review NVIDIA earnings?", "Review Alphabet earnings", "What changed?")
+        if (
+            any(kw in lower for kw in ("earning", "review", "what changed", "holding", "guidance", "margin", "revenue"))
+            or explicit_ticker is not None
+            or untracked_company is not None
+        ):
             return JevDecision(
                 mind=Mind.WORK,
                 action=ActionType.BRIEF_HOLDING,
                 holding=resolved_ticker,
+                requested_company=untracked_company,
                 needs_llm_worker=True,
                 confidence=0.95,
                 mode="mock",
-                reasoning="Work earnings review routes to LLM worker.",
+                reasoning=(
+                    f"Ad-hoc web earnings review for {untracked_company}."
+                    if untracked_company
+                    else "Work earnings review routes to LLM worker."
+                ),
             )
 
         return JevDecision(
@@ -420,6 +649,7 @@ class JevRouter:
             action=ActionType.LOG_NOTE,
             holding=None,
             needs_llm_worker=False,
+            needs_enrichment=heuristic_needs_enrichment(transcript, Mind.INTERESTS),
             confidence=0.72,
             mode="mock",
             reasoning="Default fast-path note capture.",
@@ -444,7 +674,6 @@ class JevRouter:
             if overlap == 0:
                 continue
 
-            # Emphasize topic-specific discriminators for the NVDA demo
             bonus = 0.0
             if "revenue" in q_tokens and "revenue" in chunk.topic.lower():
                 bonus += 4.0

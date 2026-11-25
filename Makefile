@@ -23,7 +23,7 @@ glasses:
 	cd glasses && npm run dev
 
 sim:
-	npx --yes @evenrealities/evenhub-simulator http://localhost:5173
+	cd glasses && npm run sim
 
 test:
 	PYTHONPATH=backend backend/.venv/bin/pytest backend/tests -v

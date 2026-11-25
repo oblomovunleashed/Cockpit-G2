@@ -10,7 +10,7 @@ import type { HudCard } from './types';
 
 export const MENU_ITEM_PULL_NOTION = 1;
 export const MENU_ITEM_NEXT_HOLDING = 2;
-export const MENU_ITEM_REFRESH = 3;
+export const MENU_ITEM_HOME = 3;
 
 const CONTAINER_HEADER_ID = 1;
 const CONTAINER_BODY_ID = 2;
@@ -24,8 +24,17 @@ const CONTAINER_FOOTER_ID = 3;
 export class G2HudRenderer {
   private initialized = false;
   private lastCard: HudCard | null = null;
+  private renderQueue: Promise<void> = Promise.resolve();
+  private readonly bridge: EvenAppBridge | null;
 
-  constructor(private readonly bridge: EvenAppBridge | null) {}
+  constructor(bridge: EvenAppBridge | null) {
+    this.bridge = bridge;
+  }
+
+  reset(): void {
+    this.initialized = false;
+    this.lastCard = null;
+  }
 
   async init(initialCard: HudCard): Promise<void> {
     const safe = sanitizeCard(initialCard);
@@ -81,9 +90,9 @@ export class G2HudRenderer {
 
     const menu = new MenuContainerProperty({
       menuItems: [
+        new MenuItemProperty({ itemID: MENU_ITEM_HOME, itemName: 'Cockpit Home' }),
         new MenuItemProperty({ itemID: MENU_ITEM_PULL_NOTION, itemName: 'Pull Notion questions' }),
-        new MenuItemProperty({ itemID: MENU_ITEM_NEXT_HOLDING, itemName: 'Next holding' }),
-        new MenuItemProperty({ itemID: MENU_ITEM_REFRESH, itemName: 'Refresh deck' }),
+        new MenuItemProperty({ itemID: MENU_ITEM_NEXT_HOLDING, itemName: 'Browse watchlist' }),
       ],
     });
 
@@ -99,6 +108,12 @@ export class G2HudRenderer {
   }
 
   async render(card: HudCard): Promise<void> {
+    const next = this.renderQueue.then(() => this.renderSerialized(card));
+    this.renderQueue = next.catch(() => {});
+    return next;
+  }
+
+  private async renderSerialized(card: HudCard): Promise<void> {
     const safe = sanitizeCard(card);
     if (!this.initialized) {
       await this.init(safe);
@@ -112,41 +127,62 @@ export class G2HudRenderer {
     }
 
     const prev = this.lastCard;
-    if (!prev || prev.header !== safe.header) {
-      await this.bridge.textContainerUpgrade(
-        new TextContainerUpgrade({
-          containerID: CONTAINER_HEADER_ID,
-          containerName: 'header',
-          contentOffset: 0,
-          contentLength: safe.header.length,
-          content: safe.header,
-          textColor: 2,
-        }),
-      );
-    }
-    if (!prev || prev.body !== safe.body) {
-      await this.bridge.textContainerUpgrade(
-        new TextContainerUpgrade({
-          containerID: CONTAINER_BODY_ID,
-          containerName: 'body',
-          contentOffset: 0,
-          contentLength: safe.body.length,
-          content: safe.body,
-          textColor: 4,
-        }),
-      );
-    }
-    if (!prev || prev.footer !== safe.footer) {
-      await this.bridge.textContainerUpgrade(
-        new TextContainerUpgrade({
-          containerID: CONTAINER_FOOTER_ID,
-          containerName: 'footer',
-          contentOffset: 0,
-          contentLength: safe.footer.length,
-          content: safe.footer,
-          textColor: 1,
-        }),
-      );
+    try {
+      if (!prev || prev.header !== safe.header) {
+        const ok = await this.bridge.textContainerUpgrade(
+          new TextContainerUpgrade({
+            containerID: CONTAINER_HEADER_ID,
+            containerName: 'header',
+            contentOffset: 0,
+            contentLength: safe.header.length,
+            content: safe.header,
+            textColor: 2,
+          }),
+        );
+        if (ok === false) {
+          this.reset();
+          await this.init(safe);
+          return;
+        }
+      }
+      if (!prev || prev.body !== safe.body) {
+        const ok = await this.bridge.textContainerUpgrade(
+          new TextContainerUpgrade({
+            containerID: CONTAINER_BODY_ID,
+            containerName: 'body',
+            contentOffset: 0,
+            contentLength: safe.body.length,
+            content: safe.body,
+            textColor: 4,
+          }),
+        );
+        if (ok === false) {
+          this.reset();
+          await this.init(safe);
+          return;
+        }
+      }
+      if (!prev || prev.footer !== safe.footer) {
+        const ok = await this.bridge.textContainerUpgrade(
+          new TextContainerUpgrade({
+            containerID: CONTAINER_FOOTER_ID,
+            containerName: 'footer',
+            contentOffset: 0,
+            contentLength: safe.footer.length,
+            content: safe.footer,
+            textColor: 1,
+          }),
+        );
+        if (ok === false) {
+          this.reset();
+          await this.init(safe);
+          return;
+        }
+      }
+    } catch {
+      this.reset();
+      await this.init(safe);
+      return;
     }
 
     this.lastCard = safe;
@@ -162,11 +198,23 @@ export class G2HudRenderer {
   }
 }
 
-function sanitizeLine(value: string, maxLen: number): string {
-  // Strip emoji / surrogate pairs unsupported by G2 LVGL fixed font
-  const cleaned = value.replace(/[\u{1F000}-\u{1FFFF}]/gu, '').trim();
+export function sanitizeLine(value: string, maxLen: number): string {
+  // Replace glyphs missing in Even G2 LVGL firmware font (e.g. U+2713 checkmark)
+  // and strip emoji / astral symbols so zero missing-glyph boxes appear on lens.
+  const cleaned = value
+    .replace(/[\u{1F000}-\u{1FFFF}]/gu, '')
+    .replace(/\u2713|\u2714/g, 'OK:')
+    .replace(/\u2192/g, '->')
+    .replace(/\u2194/g, '<->')
+    .replace(/\u25CF/g, '[REC]')
+    .replace(/\u2026/g, '...')
+    .replace(/\u2014|\u2013/g, '-')
+    .replace(/[\u2018\u2019]/g, "'")
+    .replace(/[\u201C\u201D]/g, '"')
+    .replace(/\u00B7/g, '|')
+    .trim();
   if (cleaned.length <= maxLen) return cleaned || ' ';
-  return `${cleaned.slice(0, maxLen - 1).trimEnd()}…`;
+  return `${cleaned.slice(0, Math.max(1, maxLen - 3)).trimEnd()}...`;
 }
 
 function sanitizeCard(card: HudCard): HudCard {

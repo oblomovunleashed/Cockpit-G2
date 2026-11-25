@@ -12,6 +12,8 @@ export type ActionType =
 
 export type Verdict = 'HELD' | 'AHEAD' | 'WATCH' | 'PENDING';
 
+export type EnrichmentStatus = 'none' | 'pending' | 'enriched' | 'needs_detail' | 'failed';
+
 export interface HudCard {
   header: string;
   body: string;
@@ -23,7 +25,9 @@ export interface JevDecision {
   action: ActionType;
   holding: string | null;
   peer_holding: string | null;
+  requested_company?: string | null;
   needs_llm_worker: boolean;
+  needs_enrichment?: boolean;
   confidence: number;
   mode: 'openrouter' | 'mock';
   reasoning: string | null;
@@ -50,6 +54,10 @@ export interface JournalEntry {
   ticker: string | null;
   source_citation: string | null;
   notion_page_id: string | null;
+  enrichment_status?: EnrichmentStatus;
+  enriched_summary?: string;
+  enriched_url?: string;
+  due_date?: string | null;
   created_at: string;
 }
 
@@ -61,6 +69,7 @@ export interface PendingWrite {
   ticker: string | null;
   source_citation: string | null;
   updates_next_check: boolean;
+  needs_enrichment?: boolean;
 }
 
 export interface DraftCheck {
@@ -82,6 +91,14 @@ export interface ConfirmWriteResponse {
   entry: JournalEntry;
   holding: HoldingRecord | null;
   synced_to_notion: boolean;
+  enrichment_queued?: boolean;
+  hud: HudCard;
+}
+
+export interface UndoWriteResponse {
+  undone_id: number;
+  archived_in_notion: boolean;
+  holding: HoldingRecord | null;
   hud: HudCard;
 }
 

@@ -37,4 +37,17 @@ All three seeded holdings (`NVDA`, `TSM`, `MSFT`) now use real Q3/Q1 FY27 (Oct�
 ## 3. OpenRouter STT & Browser/Simulator Audio
 
 - `openai/whisper-large-v3-turbo` on `POST /api/v1/audio/transcriptions` accepts base64-encoded 16 kHz 16-bit mono WAV cleanly (~2.2s round-trip) and transcribed spoken `"Can we review NVIDIA earnings?"` verbatim.
-- Added `BrowserMicRecorder` (`glasses/src/audio.ts`) alongside `PcmAudioRecorder` (Even G2 `audioControl`), both capped at 30 seconds and routed through identical 16 kHz PCM → 44-byte RIFF/WAV encoding so live voice works in both Even Hub Simulator and desktop browser preview.
+- **Even Hub Simulator (`0.9.5`) native CoreAudio mic vs. WKWebView `getUserMedia`:** On macOS, the simulator natively captures the MacBook microphone via `bridge.audioControl(true, AudioInputSource.Glasses)` and streams 16 kHz 16-bit LE mono PCM `audioEvent`s (3200 bytes / 100 ms), whereas WKWebView blocks `getUserMedia`. Routing the companion `Hold to Speak (Mic)` button through `bridge.audioControl` first (and falling back to `BrowserMicRecorder` with `AudioContext.resume()` in standalone browsers) makes live voice capture work reliably in both environments.
+
+---
+
+## 4. Even G2 Simulator & Live Product Iteration Learnings (PR #5)
+
+1. **LVGL missing glyphs on G2 firmware font:**
+   - The Even Hub Simulator logged `lv_draw_letter: glyph dsc. not found for U+2713` (`✓`). `G2HudRenderer.sanitizeLine()` now normalizes non-ASCII symbols (`✓` → `OK:`, `→` → `->`, `●` → `[REC]`, `·` → `|`) before sending text to G2 containers so zero missing-glyph boxes appear.
+2. **Re-initializing HUD containers after root double-tap (`shutDownPageContainer`):**
+   - Calling `bridge.shutDownPageContainer(1)` tears down containers `1/2/3`, causing subsequent `textContainerUpgrade` calls to warn `container not found`. `G2HudRenderer` now resets `initialized = false` on shutdown or failed upgrades and cleanly recreates startup containers.
+3. **Never silently fall back to `active_ticker` when the wearer names an untracked company:**
+   - Splitting Jev's `holding` schema into tracked tickers + `untracked` + `implicit_active` + `none` ensures `"Can you please preview Alphabet earnings?"` routes to a live web-grounded `GOOGL` preview/review instead of silently showing `NVDA` (`100%` Jev accuracy across tracked & untracked test cases at `~$0.000057`/call).
+4. **Fast capture on glasses + Jev-gated async post-confirm enrichment:**
+   - Adding a `needs_enrichment` `noul` question to the same Jev round-trip (`~220 ms`) lets simple logs (`"Remember to buy a birthday present"`, `enrich_p=0.09`) skip LLMs completely, while time-relative or media logs (`"I enjoyed the latest Acquired podcast"`, `enrich_p=0.88`; `"next Friday"`, `enrich_p=0.91`) confirm immediately on glasses and enrich asynchronously in the background—patching SQLite + Notion (`Enriched`, `Due Date`, `Link`, `Enrichment`) in place, and honestly marking `Needs Detail` if a show/title was never named.

@@ -9,13 +9,14 @@
     "typecheck": "tsc --noEmit",
     "test": "node --experimental-strip-types --test tests/*.test.ts",
     "preview": "vite preview --host 127.0.0.1 --port 5173",
-    "sim": "evenhub-simulator http://127.0.0.1:5173",
+    "sim": "node ./node_modules/@evenrealities/evenhub-simulator/bin/index.js http://127.0.0.1:5173",
     "pack": "npm run build && evenhub pack app.json dist -o cockpit.ehpk --sdk-ver 0.0.16"
   },
   "dependencies": {
     "@evenrealities/even_hub_sdk": "^0.0.16"
   },
   "devDependencies": {
+    "@evenrealities/evenhub-simulator": "^0.9.5",
     "typescript": "^5.8.2",
     "vite": "^6.2.0"
   }

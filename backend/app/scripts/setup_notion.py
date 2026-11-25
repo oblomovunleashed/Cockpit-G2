@@ -52,6 +52,20 @@ def build_cockpit_log_database_payload(parent_page_id: str) -> dict:
             "Ticker": {"rich_text": {}},
             "Source": {"rich_text": {}},
             "Logged At": {"date": {}},
+            "Enrichment": {
+                "select": {
+                    "options": [
+                        {"name": "None", "color": "gray"},
+                        {"name": "Pending", "color": "yellow"},
+                        {"name": "Enriched", "color": "green"},
+                        {"name": "Needs Detail", "color": "orange"},
+                        {"name": "Failed", "color": "red"},
+                    ]
+                }
+            },
+            "Enriched": {"rich_text": {}},
+            "Due Date": {"date": {}},
+            "Link": {"url": {}},
         },
     }
 

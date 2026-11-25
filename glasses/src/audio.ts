@@ -8,29 +8,78 @@ const MAX_PCM_BYTES = SAMPLE_RATE * CHANNELS * (BITS_PER_SAMPLE / 8) * 30;
 
 /**
  * Collects raw 16 kHz, signed 16-bit little-endian mono PCM chunks from Even G2
- * (`audioEvent.audioPcm`) and wraps them in a standard 44-byte RIFF/WAV header
- * compatible with OpenRouter's /v1/audio/transcriptions endpoint.
+ * or the Even Hub Simulator (`audioEvent.audioPcm`) and wraps them in a standard
+ * 44-byte RIFF/WAV header compatible with OpenRouter's /v1/audio/transcriptions.
  */
 export class PcmAudioRecorder {
   private chunks: Uint8Array[] = [];
   private totalBytes = 0;
   private recording = false;
+  private starting = false;
+  private cancelRequested = false;
+  private sessionSeq = 0;
 
   get isRecording(): boolean {
     return this.recording;
   }
 
-  async start(bridge: EvenAppBridge | null, source: AudioInputSource = AudioInputSource.Glasses): Promise<void> {
+  get isStarting(): boolean {
+    return this.starting;
+  }
+
+  get isActive(): boolean {
+    return this.recording || this.starting;
+  }
+
+  get byteCount(): number {
+    return this.totalBytes;
+  }
+
+  async start(
+    bridge: EvenAppBridge | null,
+    source: AudioInputSource = AudioInputSource.Glasses,
+  ): Promise<boolean> {
+    const token = ++this.sessionSeq;
     this.chunks = [];
     this.totalBytes = 0;
-    this.recording = true;
+    this.starting = true;
+    this.cancelRequested = false;
+
+    let opened = true;
     if (bridge) {
-      await bridge.audioControl(true, source);
+      try {
+        opened = await bridge.audioControl(true, source);
+      } catch {
+        opened = false;
+      }
     }
+
+    if (this.cancelRequested || token !== this.sessionSeq) {
+      if (opened && bridge) {
+        try {
+          await bridge.audioControl(false);
+        } catch {
+          // ignore cleanup failure
+        }
+      }
+      if (token === this.sessionSeq) {
+        this.starting = false;
+        this.cancelRequested = false;
+      }
+      return false;
+    }
+
+    this.starting = false;
+    if (!opened) {
+      this.recording = false;
+      return false;
+    }
+    this.recording = true;
+    return true;
   }
 
   pushChunk(pcm: Uint8Array): void {
-    if (!this.recording || pcm.byteLength === 0) return;
+    if ((!this.recording && !this.starting) || pcm.byteLength === 0) return;
     if (this.totalBytes >= MAX_PCM_BYTES) return;
     const remaining = MAX_PCM_BYTES - this.totalBytes;
     const slice = pcm.byteLength <= remaining ? pcm : pcm.subarray(0, remaining);
@@ -39,11 +88,22 @@ export class PcmAudioRecorder {
   }
 
   async stop(bridge: EvenAppBridge | null): Promise<Blob | null> {
+    this.cancelRequested = true;
+    this.sessionSeq += 1;
+
+    const wasActive = this.recording || this.starting;
     this.recording = false;
-    if (bridge) {
-      await bridge.audioControl(false);
+    this.starting = false;
+
+    if (wasActive && bridge) {
+      try {
+        await bridge.audioControl(false);
+      } catch {
+        // ignore stop failure
+      }
     }
     if (this.totalBytes === 0) {
+      this.chunks = [];
       return null;
     }
     const wavBytes = encodePcmToWav(this.chunks, this.totalBytes);
@@ -93,6 +153,10 @@ export class BrowserMicRecorder {
     return this.recording || this.starting;
   }
 
+  get byteCount(): number {
+    return this.totalBytes;
+  }
+
   /**
    * Starts microphone capture. Returns `true` if capture is active, or `false` if the
    * button was released (via `stop()`) while microphone permission was still pending.
@@ -103,7 +167,7 @@ export class BrowserMicRecorder {
       ((constraints: MediaStreamConstraints) => {
         if (!navigator.mediaDevices?.getUserMedia) {
           return Promise.reject(
-            new Error('Microphone capture is not supported in this browser/WebView.'),
+            new Error('Browser microphone API unavailable here; open http://127.0.0.1:5173 in Chrome or use Simulator touchbar hold.'),
           );
         }
         return navigator.mediaDevices.getUserMedia(constraints);
@@ -139,9 +203,34 @@ export class BrowserMicRecorder {
       return false;
     }
 
-    const createCtx = this.deps.createAudioContext ?? (() => new AudioContext());
+    const createCtx =
+      this.deps.createAudioContext ??
+      (() => {
+        const AudioCtx =
+          window.AudioContext ||
+          (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+        if (!AudioCtx) {
+          throw new Error('AudioContext is not supported in this browser.');
+        }
+        return new AudioCtx();
+      });
     this.stream = stream;
     this.ctx = createCtx();
+    if (this.ctx.state === 'suspended' && typeof this.ctx.resume === 'function') {
+      await this.ctx.resume();
+    }
+    if (this.cancelRequested || token !== this.sessionSeq) {
+      this.stream.getTracks().forEach((t) => t.stop());
+      await this.ctx.close();
+      this.stream = null;
+      this.ctx = null;
+      if (token === this.sessionSeq) {
+        this.starting = false;
+        this.cancelRequested = false;
+      }
+      return false;
+    }
+
     this.source = this.ctx.createMediaStreamSource(this.stream);
     this.processor = this.ctx.createScriptProcessor(4096, 1, 1);
 

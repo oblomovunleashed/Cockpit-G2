@@ -12,9 +12,14 @@ import {
   MENU_ITEM_PULL_NOTION,
   MENU_ITEM_REFRESH,
 } from './hud';
-import { dispatchEvenHubEvent, executeTapAction, nextViewModeFromUtterance } from './input';
+import {
+  dispatchEvenHubEvent,
+  executeSwipeAction,
+  executeTapAction,
+  nextViewModeFromUtterance,
+} from './input';
 import { activeHolding, createInitialState, holdingToCard, type CockpitState } from './state';
-import type { HudCard, JevDecision } from './types';
+import type { ConfirmWriteResponse, HudCard, JevDecision, JournalEntry, Mind } from './types';
 
 const NVDA_MARGIN_Q = 'Does NVIDIA expect the margin trough to get deeper?';
 const NVDA_REVENUE_Q = "Is revenue running ahead of management's guidance?";
@@ -24,8 +29,11 @@ const recorder = new PcmAudioRecorder();
 const browserMic = new BrowserMicRecorder();
 const state: CockpitState = createInitialState();
 
+let activeMicKind: 'bridge' | 'browser' | null = null;
+let enrichmentPollTimer: number | null = null;
+
 function isAnyMicRecording(): boolean {
-  return recorder.isRecording || browserMic.isActive;
+  return recorder.isActive || browserMic.isActive;
 }
 
 let bridge: EvenAppBridge | null = null;
@@ -49,6 +57,29 @@ async function connectBridgeWithTimeout(timeoutMs = 1500): Promise<EvenAppBridge
   }
 }
 
+function setMicButtonLabel(recording: boolean, sourceLabel = ''): void {
+  const micBtn = document.getElementById('btn-mic');
+  if (!micBtn) return;
+  if (recording) {
+    micBtn.textContent = sourceLabel ? `[REC] Listening (${sourceLabel}) - release` : '[REC] Listening - release';
+    micBtn.classList.add('recording');
+  } else {
+    micBtn.textContent = 'Hold to Speak (Mic)';
+    micBtn.classList.remove('recording');
+  }
+}
+
+function updatePendingControls(): void {
+  const bar = document.getElementById('pending-controls');
+  if (bar) {
+    bar.style.display = state.pendingWrite ? 'flex' : 'none';
+  }
+  const undoBtn = document.getElementById('btn-undo') as HTMLButtonElement | null;
+  if (undoBtn) {
+    undoBtn.disabled = !state.lastSavedEntry;
+  }
+}
+
 function updateCompanionPanel(decision?: JevDecision | null): void {
   const backendPill = document.getElementById('backend-status');
   if (backendPill) {
@@ -60,16 +91,21 @@ function updateCompanionPanel(decision?: JevDecision | null): void {
 
   const traceEl = document.getElementById('jev-trace');
   if (traceEl && decision) {
-    const scopePart = decision.peer_holding && decision.holding
-      ? `route: ${decision.peer_holding} → ${decision.holding}`
-      : decision.holding
-        ? `holding: ${decision.holding}`
-        : '';
+    const scopePart =
+      decision.peer_holding && decision.holding
+        ? `route: ${decision.peer_holding} -> ${decision.holding}`
+        : decision.holding
+          ? `holding: ${decision.holding}`
+          : decision.requested_company
+            ? `web company: ${decision.requested_company}`
+            : '';
+    const enrichPart = decision.needs_enrichment ? 'post_enrich: YES (async)' : '';
     traceEl.textContent = [
       `mind: ${decision.mind.toUpperCase()}`,
       `skill: ${decision.action}`,
       scopePart,
       `llm_worker: ${decision.needs_llm_worker ? 'YES (System-2 DeepSeek)' : 'NO (System-1 / Deterministic)'}`,
+      enrichPart,
       `confidence: ${(decision.confidence * 100).toFixed(0)}% (${decision.mode})`,
       decision.reasoning ? `note: ${decision.reasoning}` : '',
     ]
@@ -83,15 +119,91 @@ function updateCompanionPanel(decision?: JevDecision | null): void {
       listEl.innerHTML = '<li>No confirmed entries yet.</li>';
     } else {
       listEl.innerHTML = '';
-      for (const entry of state.recentJournal.slice(0, 8)) {
+      for (const entry of state.recentJournal.slice(0, 10)) {
         const li = document.createElement('li');
         const tickerTag = entry.ticker ? ` [${entry.ticker}]` : '';
         const notionTag = entry.notion_page_id ? ' · Notion' : '';
-        li.textContent = `[${entry.mind.toUpperCase()} · ${entry.kind}]${tickerTag} ${entry.content}${notionTag}`;
+        const statusTag =
+          entry.enrichment_status && entry.enrichment_status !== 'none'
+            ? ` · ${entry.enrichment_status.toUpperCase()}`
+            : '';
+        const dueTag = entry.due_date ? ` · Due ${entry.due_date}` : '';
+        li.textContent = `[${entry.mind.toUpperCase()} · ${entry.kind}]${tickerTag} ${entry.content}${dueTag}${statusTag}${notionTag}`;
+
+        if (entry.enriched_summary) {
+          const detail = document.createElement('div');
+          detail.className = 'enriched-note';
+          detail.textContent = `-> ${entry.enriched_summary}`;
+          if (entry.enriched_url) {
+            const link = document.createElement('a');
+            link.href = entry.enriched_url;
+            link.target = '_blank';
+            link.rel = 'noopener noreferrer';
+            link.textContent = ' [source]';
+            detail.appendChild(link);
+          }
+          li.appendChild(detail);
+        }
         listEl.appendChild(li);
       }
     }
   }
+
+  updatePendingControls();
+}
+
+function stopEnrichmentPoll(): void {
+  if (enrichmentPollTimer !== null) {
+    window.clearInterval(enrichmentPollTimer);
+    enrichmentPollTimer = null;
+  }
+}
+
+function startEnrichmentPoll(entryId: number): void {
+  stopEnrichmentPoll();
+  let attempts = 0;
+  enrichmentPollTimer = window.setInterval(() => {
+    attempts += 1;
+    if (attempts > 18) {
+      stopEnrichmentPoll();
+      return;
+    }
+    void api
+      .getJournalEntry(entryId)
+      .then(async (latest: JournalEntry) => {
+        if (!latest.enrichment_status || latest.enrichment_status === 'pending') {
+          return;
+        }
+        stopEnrichmentPoll();
+        await refreshDeck(false);
+
+        // If wearer is still viewing this entry's SAVED receipt card, update the G2 lens in place!
+        if (
+          state.mode === 'SAVED' &&
+          state.lastSavedEntry &&
+          state.lastSavedEntry.id === latest.id &&
+          !isAnyMicRecording()
+        ) {
+          state.lastSavedEntry = latest;
+          const badge =
+            latest.enrichment_status === 'enriched'
+              ? 'ENRICHED'
+              : latest.enrichment_status === 'needs_detail'
+                ? 'NEEDS DETAIL'
+                : 'SAVED';
+          const duePart = latest.due_date ? ` [Due ${latest.due_date}]` : '';
+          await showCard({
+            header: `${latest.mind.toUpperCase()} · ${badge}`,
+            body: `${latest.enriched_summary || latest.content}${duePart}`,
+            footer: 'Tap: done · Swipe: undo · Hold: speak',
+          });
+        }
+      })
+      .catch(() => {
+        // Entry may have been undone
+        stopEnrichmentPoll();
+      });
+  }, 2000);
 }
 
 async function refreshDeck(renderCurrent = true): Promise<void> {
@@ -108,11 +220,13 @@ async function refreshDeck(renderCurrent = true): Promise<void> {
     state.mode = 'BRIEFING';
     state.pendingWrite = null;
     state.suggestedCheck = null;
+    state.lastSavedEntry = null;
     await hud.render(holdingToCard(state));
   }
 }
 
 async function showCard(card: HudCard): Promise<void> {
+  updatePendingControls();
   await hud.render(card);
 }
 
@@ -121,6 +235,8 @@ async function submitTextUtterance(transcript: string): Promise<void> {
   const clean = transcript.trim();
   if (!clean) return;
 
+  stopEnrichmentPoll();
+  state.lastSavedEntry = null;
   state.mode = 'PROCESSING';
   await showCard({
     header: 'COCKPIT · JEV ROUTING',
@@ -165,41 +281,88 @@ async function handleTapAction(): Promise<void> {
     stageSuggestedCheck: (ticker) => api.stageSuggestedCheck(ticker),
     refreshDeckAfterSave: () => refreshDeck(false),
     showCard,
+    onSaved: (confirmed: ConfirmWriteResponse) => {
+      if (confirmed.enrichment_queued) {
+        startEnrichmentPoll(confirmed.entry.id);
+      }
+    },
   });
+  updatePendingControls();
 }
 
 async function handleSwipe(delta: number): Promise<void> {
-  if (state.mode === 'PROCESSING' || isAnyMicRecording()) return;
+  await executeSwipeAction(state, delta, {
+    isRecording: () => isAnyMicRecording(),
+    getActiveHolding: activeHolding,
+    reclassifyPendingWrite: (pendingId, payload) => api.updatePendingWrite(pendingId, payload),
+    undoJournalEntry: (entryId) => {
+      stopEnrichmentPoll();
+      return api.undoJournalEntry(entryId);
+    },
+    refreshDeckAfterChange: () => refreshDeck(false),
+    showCard,
+  });
+  updatePendingControls();
+}
 
-  if (state.pendingWrite) {
-    const pendingId = state.pendingWrite.id;
-    state.pendingWrite = null;
-    state.suggestedCheck = null;
-    await api.cancelWrite(pendingId);
-    state.mode = 'BRIEFING';
-    await showCard(holdingToCard(state));
-    return;
+async function handleReclassifyDirect(mind: Mind, kind: 'note' | 'task' | 'check'): Promise<void> {
+  if (!state.pendingWrite || state.mode === 'PROCESSING' || isAnyMicRecording()) return;
+  const active = activeHolding(state);
+  const ticker = mind === 'work' ? (state.pendingWrite.ticker ?? active?.ticker ?? null) : null;
+  state.mode = 'PROCESSING';
+  try {
+    const updated = await api.updatePendingWrite(state.pendingWrite.id, { mind, kind, ticker });
+    state.pendingWrite = updated.pending_write;
+    state.mode = 'CONFIRM_WRITE';
+    await showCard(updated.hud);
+  } catch (err) {
+    state.mode = 'CONFIRM_WRITE';
+    await showCard({
+      header: 'COCKPIT · RECLASSIFY ERROR',
+      body: err instanceof Error ? err.message : 'Failed to switch mind.',
+      footer: 'Tap: save · 2x: cancel',
+    });
   }
+}
 
-  state.suggestedCheck = null;
-  if (state.holdings.length > 0) {
-    state.holdingIndex =
-      (state.holdingIndex + delta + state.holdings.length) % state.holdings.length;
+async function handleUndoDirect(): Promise<void> {
+  if (!state.lastSavedEntry || state.mode === 'PROCESSING' || isAnyMicRecording()) return;
+  stopEnrichmentPoll();
+  const entryId = state.lastSavedEntry.id;
+  state.lastSavedEntry = null;
+  state.mode = 'PROCESSING';
+  try {
+    const undone = await api.undoJournalEntry(entryId);
+    await refreshDeck(false);
+    state.mode = 'SAVED';
+    await showCard(undone.hud);
+  } catch (err) {
     state.mode = 'BRIEFING';
-    await showCard(holdingToCard(state));
+    await showCard({
+      header: 'COCKPIT · UNDO ERROR',
+      body: err instanceof Error ? err.message : 'Could not undo entry.',
+      footer: 'Swipe: deck',
+    });
   }
 }
 
 async function handleDoubleTap(): Promise<void> {
   if (state.mode === 'PROCESSING') return;
 
-  if (state.mode !== 'BRIEFING' || state.pendingWrite || state.suggestedCheck) {
+  if (
+    state.mode !== 'BRIEFING' ||
+    state.pendingWrite ||
+    state.suggestedCheck ||
+    state.lastSavedEntry
+  ) {
+    stopEnrichmentPoll();
     if (state.pendingWrite) {
       const pendingId = state.pendingWrite.id;
       state.pendingWrite = null;
       await api.cancelWrite(pendingId);
     }
     state.suggestedCheck = null;
+    state.lastSavedEntry = null;
     state.mode = 'BRIEFING';
     await showCard(holdingToCard(state));
     return;
@@ -208,32 +371,49 @@ async function handleDoubleTap(): Promise<void> {
   // Even Hub QA requirement: root-page double-tap must call shutDownPageContainer(1)
   if (bridge) {
     await bridge.shutDownPageContainer(1);
+    hud.reset();
   }
 }
 
 async function startVoiceCapture(): Promise<void> {
   if (state.mode === 'PROCESSING' || isAnyMicRecording()) return;
+  stopEnrichmentPoll();
+  activeMicKind = 'bridge';
   state.mode = 'LISTENING';
+  setMicButtonLabel(true, 'G2/Sim');
   await showCard({
-    header: 'COCKPIT · ● LISTENING',
+    header: 'COCKPIT · [REC] LISTENING',
     body: 'Speak a note, task, or earnings question.\nRelease when finished.',
-    footer: 'Release to route via Jev',
+    footer: 'Release to transcribe via OpenRouter',
   });
-  await recorder.start(bridge, AudioInputSource.Glasses);
+  const started = await recorder.start(bridge, AudioInputSource.Glasses);
+  if (!started) {
+    activeMicKind = null;
+    setMicButtonLabel(false);
+    if (state.mode === 'LISTENING') {
+      state.mode = 'BRIEFING';
+      await showCard(holdingToCard(state));
+    }
+  }
 }
 
-async function routeWavBlob(wavBlob: Blob | null): Promise<void> {
+async function routeWavBlob(wavBlob: Blob | null, sourceLabel: string): Promise<void> {
   if (!wavBlob) {
-    state.mode = 'BRIEFING';
-    await showCard(holdingToCard(state));
+    state.mode = 'SAVED';
+    state.lastSavedEntry = null;
+    await showCard({
+      header: 'COCKPIT · NO AUDIO',
+      body: `No ${sourceLabel} mic frames received. Hold the button for 1-2s while speaking and check macOS Microphone permission.`,
+      footer: 'Tap: deck · Hold: try again',
+    });
     return;
   }
 
   state.mode = 'PROCESSING';
   await showCard({
     header: 'COCKPIT · TRANSCRIBING',
-    body: 'Transcribing clip and routing via Jev...',
-    footer: 'OpenRouter STT → Jev',
+    body: `Sending ${(wavBlob.size / 1024).toFixed(1)} KB audio clip to OpenRouter Whisper -> Jev...`,
+    footer: 'Please wait...',
   });
 
   try {
@@ -242,6 +422,7 @@ async function routeWavBlob(wavBlob: Blob | null): Promise<void> {
     state.lastDecision = res.decision;
     state.pendingWrite = res.pending_write;
     state.suggestedCheck = res.suggested_check;
+    state.lastSavedEntry = null;
     if (res.holding) {
       const idx = state.holdings.findIndex((h) => h.ticker === res.holding?.ticker);
       if (idx >= 0) {
@@ -253,57 +434,93 @@ async function routeWavBlob(wavBlob: Blob | null): Promise<void> {
     updateCompanionPanel(res.decision);
     await showCard(res.hud);
   } catch (err) {
-    state.mode = 'BRIEFING';
+    state.mode = 'SAVED';
+    state.lastSavedEntry = null;
     await showCard({
       header: 'COCKPIT · VOICE ERROR',
       body: err instanceof Error ? err.message : 'Voice transcription failed.',
-      footer: 'Hold to try again',
+      footer: 'Tap: deck · Hold: try again',
     });
   }
 }
 
 async function stopVoiceCaptureAndRoute(): Promise<void> {
-  if (!recorder.isRecording) return;
+  if (!recorder.isActive) return;
+  const wasListening = state.mode === 'LISTENING';
+  activeMicKind = null;
+  setMicButtonLabel(false);
   const wavBlob = await recorder.stop(bridge);
-  await routeWavBlob(wavBlob);
+  if (!wavBlob && !wasListening) {
+    return;
+  }
+  await routeWavBlob(wavBlob, 'G2/Simulator');
 }
 
-async function startBrowserMicCapture(): Promise<void> {
+async function startUnifiedMicButtonCapture(): Promise<void> {
   if (state.mode === 'PROCESSING' || isAnyMicRecording()) return;
+  stopEnrichmentPoll();
+
+  // Prefer native Even Hub Bridge audioControl when running inside Simulator or G2 glasses!
+  if (bridge) {
+    activeMicKind = 'bridge';
+    setMicButtonLabel(true, 'G2/Sim');
+    state.mode = 'LISTENING';
+    await showCard({
+      header: 'COCKPIT · [REC] LISTENING',
+      body: 'Listening via Even Hub mic...\nHold while speaking, release to send.',
+      footer: 'Release to transcribe via OpenRouter',
+    });
+    const ok = await recorder.start(bridge, AudioInputSource.Glasses);
+    if (ok) return;
+    // If cancelled while starting, do not fall back
+    if (activeMicKind === null) return;
+    activeMicKind = null;
+    setMicButtonLabel(false);
+  }
+
+  // Fallback for standalone browser preview (http://127.0.0.1:5173 in Chrome/Safari)
+  activeMicKind = 'browser';
   try {
     const started = await browserMic.start();
     if (!started) {
-      // Button was released while getUserMedia permission was pending; stay on current view.
+      activeMicKind = null;
+      setMicButtonLabel(false);
       return;
     }
     state.mode = 'LISTENING';
+    setMicButtonLabel(true, 'Browser');
     await showCard({
-      header: 'COCKPIT · ● LISTENING (MIC)',
-      body: 'Speak a note, task, or earnings question.\nRelease button when finished.',
+      header: 'COCKPIT · [REC] LISTENING',
+      body: 'Listening via browser mic...\nHold while speaking, release to send.',
       footer: 'Release to transcribe via OpenRouter',
     });
   } catch (err) {
-    state.mode = 'BRIEFING';
+    activeMicKind = null;
+    setMicButtonLabel(false);
+    state.mode = 'SAVED';
+    state.lastSavedEntry = null;
     await showCard({
       header: 'COCKPIT · MIC ERROR',
       body: err instanceof Error ? err.message : 'Could not open microphone.',
-      footer: 'Check macOS/browser mic permission',
+      footer: 'Tap: deck · Check mic permission',
     });
   }
 }
 
-async function stopBrowserMicAndRoute(): Promise<void> {
-  if (!browserMic.isActive) return;
-  const wasListening = state.mode === 'LISTENING';
-  const wavBlob = await browserMic.stop();
-  if (!wavBlob) {
-    if (wasListening) {
-      state.mode = 'BRIEFING';
-      await showCard(holdingToCard(state));
-    }
+async function stopUnifiedMicButtonAndRoute(): Promise<void> {
+  if (activeMicKind === 'bridge' || recorder.isActive) {
+    await stopVoiceCaptureAndRoute();
     return;
   }
-  await routeWavBlob(wavBlob);
+  if (!browserMic.isActive) return;
+  const wasListening = state.mode === 'LISTENING';
+  activeMicKind = null;
+  setMicButtonLabel(false);
+  const wavBlob = await browserMic.stop();
+  if (!wavBlob && !wasListening) {
+    return;
+  }
+  await routeWavBlob(wavBlob, 'browser');
 }
 
 function handleEvenHubEvent(event: EvenHubEvent): void {
@@ -311,7 +528,7 @@ function handleEvenHubEvent(event: EvenHubEvent): void {
     onAudioPcm: (pcm) => recorder.pushChunk(pcm),
     onMenuItemClick: (itemId) => {
       if (itemId === MENU_ITEM_PULL_NOTION) {
-        void api.pullNotion().then(() => refreshDeck(true));
+        void handlePullNotion();
       } else if (itemId === MENU_ITEM_NEXT_HOLDING) {
         void handleSwipe(1);
       } else if (itemId === MENU_ITEM_REFRESH) {
@@ -327,6 +544,41 @@ function handleEvenHubEvent(event: EvenHubEvent): void {
   });
 }
 
+async function handlePullNotion(): Promise<void> {
+  if (state.mode === 'PROCESSING' || isAnyMicRecording()) return;
+  state.mode = 'PROCESSING';
+  await showCard({
+    header: 'COCKPIT · SYNCING NOTION',
+    body: 'Pulling updated questions from Holdings Watchlist...',
+    footer: 'Please wait...',
+  });
+  try {
+    const res = await api.pullNotion();
+    await refreshDeck(false);
+    if (res.recomputed.length > 0) {
+      const idx = state.holdings.findIndex((h) => h.ticker === res.recomputed[0]);
+      if (idx >= 0) state.holdingIndex = idx;
+      state.mode = 'SAVED';
+      state.lastSavedEntry = null;
+      await showCard({
+        header: 'NOTION · UPDATED',
+        body: `Refreshed ${res.recomputed.join(', ')} from edited Saved Question in Notion.`,
+        footer: 'Tap: view updated card · Swipe: next',
+      });
+    } else {
+      state.mode = 'BRIEFING';
+      await showCard(holdingToCard(state));
+    }
+  } catch (err) {
+    state.mode = 'BRIEFING';
+    await showCard({
+      header: 'NOTION · SYNC ERROR',
+      body: err instanceof Error ? err.message : 'Failed to pull Notion watchlist.',
+      footer: 'Swipe: deck',
+    });
+  }
+}
+
 function wireCompanionControls(): void {
   document.querySelectorAll<HTMLButtonElement>('button[data-utterance]').forEach((btn) => {
     btn.addEventListener('click', () => {
@@ -338,20 +590,25 @@ function wireCompanionControls(): void {
   const micBtn = document.getElementById('btn-mic');
   micBtn?.addEventListener('pointerdown', (e) => {
     e.preventDefault();
-    void startBrowserMicCapture();
-  });
-  micBtn?.addEventListener('pointerup', () => {
-    void stopBrowserMicAndRoute();
-  });
-  micBtn?.addEventListener('pointerleave', () => {
-    if (browserMic.isActive) {
-      void stopBrowserMicAndRoute();
+    try {
+      micBtn.setPointerCapture(e.pointerId);
+    } catch {
+      // ignore if capture unavailable
     }
+    void startUnifiedMicButtonCapture();
+  });
+  micBtn?.addEventListener('pointerup', (e) => {
+    try {
+      if (micBtn.hasPointerCapture(e.pointerId)) {
+        micBtn.releasePointerCapture(e.pointerId);
+      }
+    } catch {
+      // ignore
+    }
+    void stopUnifiedMicButtonAndRoute();
   });
   micBtn?.addEventListener('pointercancel', () => {
-    if (browserMic.isActive) {
-      void stopBrowserMicAndRoute();
-    }
+    void stopUnifiedMicButtonAndRoute();
   });
 
   document.getElementById('btn-tap')?.addEventListener('click', () => {
@@ -360,6 +617,23 @@ function wireCompanionControls(): void {
 
   document.getElementById('btn-next')?.addEventListener('click', () => {
     void handleSwipe(1);
+  });
+
+  document.getElementById('btn-undo')?.addEventListener('click', () => {
+    void handleUndoDirect();
+  });
+
+  document.getElementById('btn-reclassify-work')?.addEventListener('click', () => {
+    void handleReclassifyDirect('work', 'check');
+  });
+  document.getElementById('btn-reclassify-personal')?.addEventListener('click', () => {
+    void handleReclassifyDirect('personal', 'task');
+  });
+  document.getElementById('btn-reclassify-interests')?.addEventListener('click', () => {
+    void handleReclassifyDirect('interests', 'note');
+  });
+  document.getElementById('btn-cancel-pending')?.addEventListener('click', () => {
+    void handleDoubleTap();
   });
 
   document.getElementById('btn-flip')?.addEventListener('click', async () => {
@@ -373,13 +647,13 @@ function wireCompanionControls(): void {
     }
     state.pendingWrite = null;
     state.suggestedCheck = null;
+    state.lastSavedEntry = null;
     state.mode = 'BRIEFING';
     await showCard(updated.hud);
   });
 
-  document.getElementById('btn-notion')?.addEventListener('click', async () => {
-    await api.pullNotion();
-    await refreshDeck(true);
+  document.getElementById('btn-notion')?.addEventListener('click', () => {
+    void handlePullNotion();
   });
 
   const form = document.getElementById('utterance-form') as HTMLFormElement | null;

@@ -6,12 +6,15 @@ import {
   Text_ItemEvent,
   type EvenHubEvent,
 } from '@evenrealities/even_hub_sdk';
-import { BrowserMicRecorder } from '../src/audio.ts';
+import { BrowserMicRecorder, PcmAudioRecorder } from '../src/audio.ts';
+import { sanitizeLine } from '../src/hud.ts';
 import {
   dispatchEvenHubEvent,
+  executeSwipeAction,
   executeTapAction,
   nextViewModeFromUtterance,
   resolveGestureEventType,
+  type SwipeActionDeps,
   type TapActionDeps,
 } from '../src/input.ts';
 import type { CockpitState } from '../src/state.ts';
@@ -24,6 +27,7 @@ function makeState(overrides: Partial<CockpitState> = {}): CockpitState {
     holdingIndex: 0,
     pendingWrite: null,
     suggestedCheck: null,
+    lastSavedEntry: null,
     lastDecision: null,
     recentJournal: [],
     mockMode: true,
@@ -120,7 +124,8 @@ test('documented G2 single tap with omitted protobuf eventType confirms exactly 
 
   assert.deepEqual(savedIds, ['pending-123']);
   assert.equal(state.pendingWrite, null);
-  assert.equal(state.mode, 'RESULT');
+  assert.equal(state.mode, 'SAVED');
+  assert.equal(state.lastSavedEntry?.id, 1);
   assert.equal(renderedCards.at(-1)?.header, 'PERSONAL · SAVED');
 });
 
@@ -221,7 +226,7 @@ test('follow-up tap previews exact proposed draft on glasses before confirming s
   // Second tap confirms and saves after wearer has seen the wording
   await executeTapAction(state, deps);
   assert.equal(confirmCalls, 1);
-  assert.equal(state.mode, 'RESULT');
+  assert.equal(state.mode, 'SAVED');
 });
 
 test('tapping a holding with no matching passage does not stage or save a check', async () => {
@@ -505,4 +510,218 @@ test('releasing mic button while getUserMedia permission is pending cancels capt
   assert.equal(audioContextCreated, false);
   assert.equal(mic.isRecording, false);
   assert.equal(mic.isActive, false);
+});
+
+test('swipe on CONFIRM_WRITE reclassifies destination in place without re-speaking', async () => {
+  const nvda = {
+    ticker: 'NVDA',
+    company: 'NVIDIA Corp.',
+    saved_question: 'Does NVIDIA expect the margin trough to get deeper?',
+    verdict: 'HELD' as const,
+    latest_finding: 'Q4 FY27 gross margin guide 71-72%.',
+    source_citation: 'Q3 FY27 PR',
+    suggested_next_check: '',
+    next_check: '',
+    notion_page_id: null,
+    updated_at: '2026-11-25T00:00:00Z',
+  };
+  const state = makeState({
+    mode: 'CONFIRM_WRITE',
+    holdings: [nvda],
+    pendingWrite: {
+      id: 'p-reclass',
+      mind: 'interests',
+      kind: 'note',
+      content: 'Remind me to read that Stratechery piece',
+      ticker: null,
+      source_citation: null,
+      updates_next_check: false,
+    },
+  });
+
+  const calls: Array<{ mind: string; kind: string; ticker?: string | null }> = [];
+  const cards: HudCard[] = [];
+  const deps: SwipeActionDeps = {
+    isRecording: () => false,
+    getActiveHolding: (s) => s.holdings[0] ?? null,
+    reclassifyPendingWrite: async (id, payload) => {
+      calls.push(payload);
+      return {
+        pending_write: {
+          id,
+          mind: payload.mind,
+          kind: payload.kind,
+          content: state.pendingWrite!.content,
+          ticker: payload.ticker ?? null,
+          source_citation: null,
+          updates_next_check: payload.mind === 'work',
+        },
+        hud: {
+          header: `${payload.mind.toUpperCase()} · CONFIRM ${payload.kind.toUpperCase()}`,
+          body: state.pendingWrite!.content,
+          footer: 'Tap: save · Swipe: switch mind · 2x: cancel',
+        },
+      };
+    },
+    undoJournalEntry: async () => {
+      throw new Error('should not undo during confirm');
+    },
+    refreshDeckAfterChange: async () => {},
+    showCard: async (card) => {
+      cards.push(card);
+    },
+  };
+
+  // Swipe 1: Interests -> Personal Task
+  await executeSwipeAction(state, 1, deps);
+  assert.equal(state.mode, 'CONFIRM_WRITE');
+  assert.equal(state.pendingWrite?.mind, 'personal');
+  assert.equal(state.pendingWrite?.kind, 'task');
+  assert.equal(cards.at(-1)?.header, 'PERSONAL · CONFIRM TASK');
+
+  // Swipe 2: Personal -> Work Check (attaches active ticker NVDA)
+  await executeSwipeAction(state, 1, deps);
+  assert.equal(state.pendingWrite?.mind, 'work');
+  assert.equal(state.pendingWrite?.ticker, 'NVDA');
+  assert.deepEqual(calls, [
+    { mind: 'personal', kind: 'task', ticker: null },
+    { mind: 'work', kind: 'check', ticker: 'NVDA' },
+  ]);
+});
+
+test('SAVED receipt stays until tap (returns to deck) or swipe (undoes entry)', async () => {
+  const nvda = {
+    ticker: 'NVDA',
+    company: 'NVIDIA Corp.',
+    saved_question: 'Does NVIDIA expect the margin trough to get deeper?',
+    verdict: 'HELD' as const,
+    latest_finding: 'Q4 FY27 gross margin guide 71-72%.',
+    source_citation: 'Q3 FY27 PR',
+    suggested_next_check: '',
+    next_check: '',
+    notion_page_id: null,
+    updated_at: '2026-11-25T00:00:00Z',
+  };
+
+  // Case A: Tap on SAVED cleanly dismisses back to BRIEFING deck
+  const stateTap = makeState({
+    mode: 'SAVED',
+    holdings: [nvda],
+    lastSavedEntry: {
+      id: 7,
+      mind: 'interests',
+      kind: 'note',
+      content: 'Great episode',
+      ticker: null,
+      source_citation: null,
+      notion_page_id: null,
+      created_at: '2026-11-25T10:00:00Z',
+    },
+  });
+  const tapCards: HudCard[] = [];
+  await executeTapAction(stateTap, {
+    isRecording: () => false,
+    getActiveHolding: (s) => s.holdings[0] ?? null,
+    confirmWrite: async () => {
+      throw new Error('should not re-confirm');
+    },
+    stageCheck: async () => {
+      throw new Error('should not stage');
+    },
+    stageSuggestedCheck: async () => {
+      throw new Error('should not stage');
+    },
+    refreshDeckAfterSave: async () => {},
+    showCard: async (c) => {
+      tapCards.push(c);
+    },
+  });
+  assert.equal(stateTap.mode, 'BRIEFING');
+  assert.equal(stateTap.lastSavedEntry, null);
+  assert.match(tapCards.at(-1)?.header ?? '', /NVDA/);
+
+  // Case B: Swipe on SAVED triggers Undo
+  const stateUndo = makeState({
+    mode: 'SAVED',
+    holdings: [nvda],
+    lastSavedEntry: {
+      id: 8,
+      mind: 'personal',
+      kind: 'task',
+      content: 'Wrongly saved task',
+      ticker: null,
+      source_citation: null,
+      notion_page_id: 'notion-8',
+      created_at: '2026-11-25T10:01:00Z',
+    },
+  });
+  const undoneIds: number[] = [];
+  const undoCards: HudCard[] = [];
+  await executeSwipeAction(stateUndo, 1, {
+    isRecording: () => false,
+    getActiveHolding: (s) => s.holdings[0] ?? null,
+    reclassifyPendingWrite: async () => {
+      throw new Error('should not reclassify');
+    },
+    undoJournalEntry: async (id) => {
+      undoneIds.push(id);
+      return {
+        undone_id: id,
+        archived_in_notion: true,
+        holding: null,
+        hud: {
+          header: 'PERSONAL · UNDONE',
+          body: 'Undid: Wrongly saved task',
+          footer: 'Tap: deck · Hold: speak again',
+        },
+      };
+    },
+    refreshDeckAfterChange: async () => {},
+    showCard: async (c) => {
+      undoCards.push(c);
+    },
+  });
+  assert.deepEqual(undoneIds, [8]);
+  assert.equal(stateUndo.lastSavedEntry, null);
+  assert.equal(stateUndo.mode, 'SAVED');
+  assert.equal(undoCards.at(-1)?.header, 'PERSONAL · UNDONE');
+});
+
+test('PcmAudioRecorder cancels cleanly if stopped while bridge audioControl is pending', async () => {
+  let resolveOpen!: (ok: boolean) => void;
+  const openCalls: boolean[] = [];
+  const fakeBridge = {
+    audioControl: (isOpen: boolean) => {
+      openCalls.push(isOpen);
+      if (isOpen) {
+        return new Promise<boolean>((resolve) => {
+          resolveOpen = resolve;
+        });
+      }
+      return Promise.resolve(true);
+    },
+  } as unknown as import('@evenrealities/even_hub_sdk').EvenAppBridge;
+
+  const pcm = new PcmAudioRecorder();
+  const startPromise = pcm.start(fakeBridge);
+  assert.equal(pcm.isStarting, true);
+  assert.equal(pcm.isActive, true);
+
+  const blob = await pcm.stop(fakeBridge);
+  assert.equal(blob, null);
+  assert.equal(pcm.isActive, false);
+
+  resolveOpen(true);
+  const started = await startPromise;
+  assert.equal(started, false);
+  assert.equal(pcm.isRecording, false);
+  assert.equal(openCalls.includes(false), true);
+});
+
+test('sanitizeLine replaces unsupported LVGL firmware glyphs cleanly', () => {
+  const out = sanitizeLine('✓ PEER · TSM → NVDA ● …', 58);
+  assert.equal(out.includes('\u2713'), false);
+  assert.equal(out.includes('\u2192'), false);
+  assert.equal(out.includes('\u25CF'), false);
+  assert.equal(out, 'OK: PEER | TSM -> NVDA [REC] ...');
 });

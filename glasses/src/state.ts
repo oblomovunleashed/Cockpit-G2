@@ -4,10 +4,17 @@ import type {
   HudCard,
   JevDecision,
   JournalEntry,
+  Mind,
   PendingWrite,
 } from './types';
 
-export type ViewMode = 'BRIEFING' | 'LISTENING' | 'PROCESSING' | 'CONFIRM_WRITE' | 'RESULT';
+export type ViewMode =
+  | 'BRIEFING'
+  | 'LISTENING'
+  | 'PROCESSING'
+  | 'CONFIRM_WRITE'
+  | 'SAVED'
+  | 'RESULT';
 
 export interface CockpitState {
   mode: ViewMode;
@@ -15,6 +22,7 @@ export interface CockpitState {
   holdingIndex: number;
   pendingWrite: PendingWrite | null;
   suggestedCheck: DraftCheck | null;
+  lastSavedEntry: JournalEntry | null;
   lastDecision: JevDecision | null;
   recentJournal: JournalEntry[];
   mockMode: boolean;
@@ -28,6 +36,7 @@ export function createInitialState(): CockpitState {
     holdingIndex: 0,
     pendingWrite: null,
     suggestedCheck: null,
+    lastSavedEntry: null,
     lastDecision: null,
     recentJournal: [],
     mockMode: true,
@@ -37,8 +46,27 @@ export function createInitialState(): CockpitState {
 
 export function activeHolding(state: CockpitState): HoldingRecord | null {
   if (state.holdings.length === 0) return null;
-  const idx = ((state.holdingIndex % state.holdings.length) + state.holdings.length) % state.holdings.length;
+  const idx =
+    ((state.holdingIndex % state.holdings.length) + state.holdings.length) %
+    state.holdings.length;
   return state.holdings[idx] ?? null;
+}
+
+const MIND_CYCLE: ReadonlyArray<{ mind: Mind; kind: 'note' | 'task' | 'check' }> = [
+  { mind: 'interests', kind: 'note' },
+  { mind: 'personal', kind: 'task' },
+  { mind: 'work', kind: 'check' },
+];
+
+export function nextMindTarget(
+  currentMind: Mind,
+  delta: number,
+): { mind: Mind; kind: 'note' | 'task' | 'check' } {
+  const idx = MIND_CYCLE.findIndex((item) => item.mind === currentMind);
+  const start = idx >= 0 ? idx : 0;
+  const step = delta >= 0 ? 1 : -1;
+  const nextIdx = (start + step + MIND_CYCLE.length) % MIND_CYCLE.length;
+  return MIND_CYCLE[nextIdx]!;
 }
 
 export function holdingToCard(state: CockpitState): HudCard {

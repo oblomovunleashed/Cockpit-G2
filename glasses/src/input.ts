@@ -1,11 +1,13 @@
 import { OsEventTypeList, type EvenHubEvent } from '@evenrealities/even_hub_sdk';
-import type { CockpitState, ViewMode } from './state';
+import { holdingToCard, nextMindTarget, type CockpitState, type ViewMode } from './state.ts';
 import type {
   ConfirmWriteResponse,
   DraftCheck,
   HoldingRecord,
   HudCard,
+  Mind,
   PendingWrite,
+  UndoWriteResponse,
   UtteranceResponse,
 } from './types';
 
@@ -28,6 +30,19 @@ export interface TapActionDeps {
   stageSuggestedCheck: (ticker: string) => Promise<{ pending_write: PendingWrite; hud: HudCard }>;
   refreshDeckAfterSave: () => Promise<void>;
   showCard: (card: HudCard) => Promise<void>;
+  onSaved?: (confirmed: ConfirmWriteResponse) => void;
+}
+
+export interface SwipeActionDeps {
+  isRecording: () => boolean;
+  getActiveHolding: (state: CockpitState) => HoldingRecord | null;
+  reclassifyPendingWrite: (
+    pendingId: string,
+    payload: { mind: Mind; kind: 'note' | 'task' | 'check'; ticker?: string | null },
+  ) => Promise<{ pending_write: PendingWrite; hud: HudCard }>;
+  undoJournalEntry: (entryId: number) => Promise<UndoWriteResponse>;
+  refreshDeckAfterChange: () => Promise<void>;
+  showCard: (card: HudCard) => Promise<void>;
 }
 
 /**
@@ -42,7 +57,6 @@ export function resolveGestureEventType(event: EvenHubEvent): OsEventTypeList | 
     if (event.sysEvent.eventType !== undefined) {
       return event.sysEvent.eventType;
     }
-    // Non-gesture sysEvents carry imuData or systemExitReasonCode; treat bare sysEvent as CLICK.
     if (
       event.sysEvent.imuData === undefined &&
       event.sysEvent.systemExitReasonCode === undefined
@@ -103,26 +117,35 @@ export function dispatchEvenHubEvent(event: EvenHubEvent, handlers: EvenHubHandl
 
 /**
  * Determines the view mode after processing an utterance response.
- * Follow-up cards (including NO MATCH results) enter RESULT rather than BRIEFING
- * so tapping on a NO MATCH card never falls through to the holding's old check.
+ * Follow-up, preview, and ad-hoc web cards enter RESULT rather than BRIEFING
+ * so tapping on a NO MATCH card never falls through to a holding's old check.
  */
 export function nextViewModeFromUtterance(res: UtteranceResponse): ViewMode {
   if (res.pending_write) {
     return 'CONFIRM_WRITE';
   }
-  if (res.decision.action === 'brief_holding') {
+  if (res.decision.action === 'brief_holding' && res.holding) {
     return 'BRIEFING';
   }
   return 'RESULT';
 }
 
 /**
- * Executes the single-tap action with two core safety invariants:
+ * Executes the single-tap action with core safety invariants:
  * 1. Never fires duplicate saves while PROCESSING or recording.
  * 2. Never saves a draft whose exact wording has not already been displayed on the CONFIRM card.
+ * 3. On SAVED / UNDONE receipt cards, tapping cleanly returns to the calm BRIEFING deck.
  */
 export async function executeTapAction(state: CockpitState, deps: TapActionDeps): Promise<void> {
   if (state.mode === 'PROCESSING' || deps.isRecording()) return;
+
+  // Post-confirm or post-undo receipt screen stays until wearer taps to dismiss back to deck
+  if (state.mode === 'SAVED') {
+    state.lastSavedEntry = null;
+    state.mode = 'BRIEFING';
+    await deps.showCard(holdingToCard(state));
+    return;
+  }
 
   // Step 2: Confirm an already-displayed pending write
   if (state.pendingWrite) {
@@ -138,9 +161,11 @@ export async function executeTapAction(state: CockpitState, deps: TapActionDeps)
 
     try {
       const confirmed = await deps.confirmWrite(pending.id);
-      state.mode = 'RESULT';
+      state.mode = 'SAVED';
+      state.lastSavedEntry = confirmed.entry;
       await deps.refreshDeckAfterSave();
       await deps.showCard(confirmed.hud);
+      deps.onSaved?.(confirmed);
     } catch (err) {
       state.mode = 'BRIEFING';
       await deps.showCard({
@@ -152,7 +177,7 @@ export async function executeTapAction(state: CockpitState, deps: TapActionDeps)
     return;
   }
 
-  // Step 1a: On a source follow-up card, preview the exact proposed check before saving
+  // Step 1a: On a source follow-up / peer read / ad-hoc web card, preview exact check before saving
   if (state.suggestedCheck) {
     const draft = state.suggestedCheck;
     state.suggestedCheck = null;
@@ -194,5 +219,82 @@ export async function executeTapAction(state: CockpitState, deps: TapActionDeps)
         footer: 'Try again',
       });
     }
+  }
+}
+
+/**
+ * Executes swipe gestures contextually:
+ * - On CONFIRM_WRITE: cycles Mind/Kind in place to fix misclassifications without re-speaking.
+ * - On SAVED (with lastSavedEntry): triggers Undo (removes SQLite + archives Notion row).
+ * - Otherwise: navigates holdings deck.
+ */
+export async function executeSwipeAction(
+  state: CockpitState,
+  delta: number,
+  deps: SwipeActionDeps,
+): Promise<void> {
+  if (state.mode === 'PROCESSING' || deps.isRecording()) return;
+
+  // Misclassification recovery right on the glasses CONFIRM card
+  if (state.pendingWrite) {
+    const pending = state.pendingWrite;
+    const nextTarget = nextMindTarget(pending.mind, delta);
+    const active = deps.getActiveHolding(state);
+    const ticker = nextTarget.mind === 'work' ? (pending.ticker ?? active?.ticker ?? null) : null;
+
+    state.mode = 'PROCESSING';
+    try {
+      const updated = await deps.reclassifyPendingWrite(pending.id, {
+        mind: nextTarget.mind,
+        kind: nextTarget.kind,
+        ticker,
+      });
+      state.pendingWrite = updated.pending_write;
+      state.mode = 'CONFIRM_WRITE';
+      await deps.showCard(updated.hud);
+    } catch (err) {
+      state.mode = 'CONFIRM_WRITE';
+      await deps.showCard({
+        header: 'COCKPIT · RECLASSIFY ERROR',
+        body: err instanceof Error ? err.message : 'Could not switch mind.',
+        footer: 'Tap: save · 2x: cancel',
+      });
+    }
+    return;
+  }
+
+  // Undo immediately from the SAVED receipt screen
+  if (state.mode === 'SAVED' && state.lastSavedEntry) {
+    const entryToUndo = state.lastSavedEntry;
+    state.lastSavedEntry = null;
+    state.mode = 'PROCESSING';
+    await deps.showCard({
+      header: 'COCKPIT · UNDOING',
+      body: 'Removing entry from journal and Notion...',
+      footer: 'Please wait...',
+    });
+    try {
+      const undone = await deps.undoJournalEntry(entryToUndo.id);
+      await deps.refreshDeckAfterChange();
+      state.mode = 'SAVED';
+      await deps.showCard(undone.hud);
+    } catch (err) {
+      state.mode = 'BRIEFING';
+      await deps.showCard({
+        header: 'COCKPIT · UNDO ERROR',
+        body: err instanceof Error ? err.message : 'Could not undo entry.',
+        footer: 'Swipe: deck',
+      });
+    }
+    return;
+  }
+
+  state.suggestedCheck = null;
+  state.lastSavedEntry = null;
+  if (state.holdings.length > 0) {
+    state.holdingIndex =
+      (state.holdingIndex + delta + state.holdings.length) % state.holdings.length;
+    state.mode = 'BRIEFING';
+    await deps.showCard(holdingToCard(state));
   }
 }

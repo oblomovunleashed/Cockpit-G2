@@ -146,7 +146,18 @@ def test_notion_setup_helpers_and_env_update(tmp_path: Path) -> None:
     assert normalized == "12345678-90ab-cdef-1234-567890abcdef"
 
     log_payload = build_cockpit_log_database_payload(normalized)
-    assert set(log_payload["properties"].keys()) == {"Entry", "Mind", "Kind", "Ticker", "Source", "Logged At"}
+    assert set(log_payload["properties"].keys()) == {
+        "Entry",
+        "Mind",
+        "Kind",
+        "Ticker",
+        "Source",
+        "Logged At",
+        "Enrichment",
+        "Enriched",
+        "Due Date",
+        "Link",
+    }
 
     hold_payload = build_holdings_database_payload(normalized)
     assert set(hold_payload["properties"].keys()) == {

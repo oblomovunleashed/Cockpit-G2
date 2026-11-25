@@ -35,5 +35,5 @@ typecheck:
 build:
 	cd glasses && npm run build
 
-pack: build
-	cd glasses && npx --yes @evenrealities/evenhub-cli pack app.json dist -o cockpit.ehpk --sdk-ver 0.0.16
+pack:
+	cd glasses && npm run pack

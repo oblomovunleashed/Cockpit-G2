@@ -44,7 +44,7 @@ async def test_concurrent_confirmations_consume_pending_write_atomically(tmp_pat
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
         staged = await client.post(
             "/api/text",
-            json={"transcript": "Remember to buy a birthday present", "active_ticker": "NVDA"},
+            json={"transcript": "Remember to buy a birthday present", "active_ticker": "NTRA"},
         )
         assert staged.status_code == 200
         pending_id = staged.json()["pending_write"]["id"]
@@ -66,20 +66,20 @@ async def test_concurrent_confirmations_consume_pending_write_atomically(tmp_pat
 def test_long_transcripts_preserved_in_pending_and_confirmed_writes(tmp_path: Path) -> None:
     """Transcripts longer than 200 chars are clipped only for HUD rendering, never in persistence."""
     long_note = (
-        "This podcast on TSMC was great: "
+        "This podcast on Natera was great: "
         + " ".join(f"detail{i}" for i in range(45))
     )
     assert len(long_note) > 260
 
     long_check = (
-        "At the next call, check whether those Q1 FY28 price increases are on schedule and "
+        "At the next call, check whether Signatera ASP holds above $1,290 and "
         + " ".join(f"verify{i}" for i in range(40))
     )
     assert len(long_check) > 260
 
     with TestClient(create_app(_make_settings(tmp_path))) as client:
         # 1. Fast-path note
-        r_note = client.post("/api/text", json={"transcript": long_note, "active_ticker": "NVDA"})
+        r_note = client.post("/api/text", json={"transcript": long_note, "active_ticker": "NTRA"})
         assert r_note.status_code == 200
         note_payload = r_note.json()
         assert note_payload["pending_write"]["content"] == long_note
@@ -90,7 +90,7 @@ def test_long_transcripts_preserved_in_pending_and_confirmed_writes(tmp_path: Pa
         assert c_note.json()["entry"]["content"] == long_note
 
         # 2. Spoken Work next-quarter check
-        r_check = client.post("/api/text", json={"transcript": long_check, "active_ticker": "NVDA"})
+        r_check = client.post("/api/text", json={"transcript": long_check, "active_ticker": "NTRA"})
         assert r_check.status_code == 200
         check_payload = r_check.json()
         assert check_payload["pending_write"]["content"] == long_check
@@ -103,13 +103,13 @@ def test_long_transcripts_preserved_in_pending_and_confirmed_writes(tmp_path: Pa
 
 
 def test_active_ticker_context_does_not_force_unrelated_note_into_work(tmp_path: Path) -> None:
-    """Unmatched utterances with active_ticker='NVDA' must still route to default note capture."""
+    """Unmatched utterances with active_ticker='NTRA' must still route to default note capture."""
     with TestClient(create_app(_make_settings(tmp_path))) as client:
         r_idea = client.post(
             "/api/text",
             json={
                 "transcript": "An idea: build a solar-powered boat",
-                "active_ticker": "NVDA",
+                "active_ticker": "NTRA",
             },
         )
         assert r_idea.status_code == 200
@@ -122,13 +122,13 @@ def test_active_ticker_context_does_not_force_unrelated_note_into_work(tmp_path:
         # Explicit Work intent still resolves active_ticker context
         r_work = client.post(
             "/api/text",
-            json={"transcript": "What changed?", "active_ticker": "NVDA"},
+            json={"transcript": "What changed?", "active_ticker": "NTRA"},
         )
         assert r_work.status_code == 200
         work = r_work.json()
         assert work["decision"]["mind"] == "work"
         assert work["decision"]["action"] == "brief_holding"
-        assert work["decision"]["holding"] == "NVDA"
+        assert work["decision"]["holding"] == "NTRA"
 
 
 def test_watchlist_notion_page_id_persisted_across_confirmations(tmp_path: Path) -> None:
@@ -146,27 +146,25 @@ def test_watchlist_notion_page_id_persisted_across_confirmations(tmp_path: Path)
 
     async def fake_sync_holding(holding, **_kwargs) -> str:
         seen_page_ids.append(holding.notion_page_id)
-        return holding.notion_page_id or "watchlist-nvda-1"
+        return holding.notion_page_id or "watchlist-ntra-1"
 
     runtime.notion.push_journal_entry = fake_push_journal  # type: ignore[method-assign]
     runtime.notion.pull_holdings = fake_pull_holdings  # type: ignore[method-assign]
     runtime.notion.sync_holding_update = fake_sync_holding  # type: ignore[method-assign]
 
     with TestClient(app) as client:
-        # 1st confirmed check creates watchlist page and persists its ID
-        s1 = client.post("/api/holdings/NVDA/stage-suggested-check")
+        s1 = client.post("/api/holdings/NTRA/stage-suggested-check")
         assert s1.status_code == 200
         c1 = client.post("/api/confirm", json={"pending_id": s1.json()["pending_write"]["id"]})
         assert c1.status_code == 200
-        assert c1.json()["holding"]["notion_page_id"] == "watchlist-nvda-1"
-        assert runtime.db.get_holding("NVDA").notion_page_id == "watchlist-nvda-1"
+        assert c1.json()["holding"]["notion_page_id"] == "watchlist-ntra-1"
+        assert runtime.db.get_holding("NTRA").notion_page_id == "watchlist-ntra-1"
 
-        # 2nd confirmed check reuses persisted watchlist page ID instead of creating a duplicate
-        s2 = client.post("/api/holdings/NVDA/stage-suggested-check")
+        s2 = client.post("/api/holdings/NTRA/stage-suggested-check")
         assert s2.status_code == 200
         c2 = client.post("/api/confirm", json={"pending_id": s2.json()["pending_write"]["id"]})
         assert c2.status_code == 200
-        assert seen_page_ids == [None, "watchlist-nvda-1"]
+        assert seen_page_ids == [None, "watchlist-ntra-1"]
 
 
 def test_followup_never_stages_unseen_pending_write(tmp_path: Path) -> None:
@@ -178,29 +176,26 @@ def test_followup_never_stages_unseen_pending_write(tmp_path: Path) -> None:
         follow = client.post(
             "/api/text",
             json={
-                "transcript": "What did management expect to bring margins back up?",
-                "active_ticker": "NVDA",
+                "transcript": "What drove Signatera ASP and cash flow?",
+                "active_ticker": "NTRA",
             },
         )
         assert follow.status_code == 200
         data = follow.json()
         assert data["decision"]["action"] == "follow_up_source"
-        assert "Q1 FY28" in data["hud"]["body"]
-        # Nothing silently staged while showing the explanation card
+        assert "$1,290" in data["hud"]["body"]
         assert data["pending_write"] is None
         assert data["suggested_check"] is not None
         proposed_text = data["suggested_check"]["content"]
-        assert "price increases" in proposed_text
+        assert "$1,290" in proposed_text
 
-        # Explicitly stage the proposed check -> glasses display the exact wording before confirm
         staged = client.post("/api/stage-check", json=data["suggested_check"])
         assert staged.status_code == 200
         staged_payload = staged.json()
-        assert staged_payload["hud"]["header"] == "WORK · NVDA · CONFIRM CHECK"
+        assert staged_payload["hud"]["header"] == "WORK · NTRA · CONFIRM CHECK"
         assert staged_payload["hud"]["body"] == proposed_text
         assert staged_payload["pending_write"]["content"] == proposed_text
 
-        # Confirm saves the exact text shown on the CONFIRM card
         confirmed = client.post(
             "/api/confirm",
             json={"pending_id": staged_payload["pending_write"]["id"]},
@@ -215,9 +210,9 @@ def test_unsupported_question_returns_no_matching_passage(tmp_path: Path) -> Non
     'No matching passage' card with verdict and suggested_next_check suppressed.
     """
     with TestClient(create_app(_make_settings(tmp_path))) as client:
-        for question in ("Warranty reserves?", "What are NVIDIA's warranty reserves?"):
+        for question in ("Warranty reserves?", "What are Natera's warranty reserves?"):
             resp = client.patch(
-                "/api/holdings/NVDA/question",
+                "/api/holdings/NTRA/question",
                 json={"saved_question": question},
             )
             assert resp.status_code == 200
@@ -229,11 +224,10 @@ def test_unsupported_question_returns_no_matching_passage(tmp_path: Path) -> Non
             assert "No matching passage" in holding["latest_finding"]
             assert holding["source_citation"] == ""
             assert holding["suggested_next_check"] == ""
-            assert "HELD" not in hud["header"]
+            assert "AHEAD" not in hud["header"]
             assert "No matching passage" in hud["body"]
 
-            # Attempting to stage a suggested check when unsupported must be rejected
-            stage_resp = client.post("/api/holdings/NVDA/stage-suggested-check")
+            stage_resp = client.post("/api/holdings/NTRA/stage-suggested-check")
             assert stage_resp.status_code == 409
 
 
@@ -244,18 +238,17 @@ def test_opening_briefing_preserves_and_uses_newer_notion_edit(tmp_path: Path) -
     """
     app = create_app(_make_settings(tmp_path, with_notion=True))
     runtime = app.state.runtime
-    runtime.db.update_holding_notion_page_id("NVDA", "watchlist-nvda-1")
+    runtime.db.update_holding_notion_page_id("NTRA", "watchlist-ntra-1")
 
     sync_calls: list[dict[str, object]] = []
 
     async def fake_pull_holdings():
-        # Wearer edited NVDA's Saved Question and Next Check directly in Notion
         return {
-            "NVDA": NotionHoldingSnapshot(
-                ticker="NVDA",
-                saved_question="Is revenue running ahead of management's guidance?",
-                next_check="Check Q4 data center backlog in Notion",
-                notion_page_id="watchlist-nvda-1",
+            "NTRA": NotionHoldingSnapshot(
+                ticker="NTRA",
+                saved_question="Is Signatera volume and revenue running ahead of full-year guidance?",
+                next_check="Check Q4 clinical MRD volume in Notion",
+                notion_page_id="watchlist-ntra-1",
             )
         }
 
@@ -276,23 +269,24 @@ def test_opening_briefing_preserves_and_uses_newer_notion_edit(tmp_path: Path) -
                 "include_next_check": include_next_check,
             }
         )
-        return holding.notion_page_id or "watchlist-nvda-1"
+        return holding.notion_page_id or "watchlist-ntra-1"
 
     runtime.notion.pull_holdings = fake_pull_holdings  # type: ignore[method-assign]
     runtime.notion.sync_holding_update = fake_sync_holding  # type: ignore[method-assign]
 
     with TestClient(app) as client:
-        brief = client.post("/api/text", json={"transcript": "Can we review NVIDIA earnings?"})
+        brief = client.post("/api/text", json={"transcript": "Can we review Natera earnings?"})
         assert brief.status_code == 200
         payload = brief.json()
 
-        # Recomputed using the newer Notion question ($115.8bn revenue card, not stale margin card)
-        assert payload["holding"]["saved_question"] == "Is revenue running ahead of management's guidance?"
-        assert payload["holding"]["next_check"] == "Check Q4 data center backlog in Notion"
-        assert "$115.8bn" in payload["hud"]["body"]
+        assert (
+            payload["holding"]["saved_question"]
+            == "Is Signatera volume and revenue running ahead of full-year guidance?"
+        )
+        assert payload["holding"]["next_check"] == "Check Q4 clinical MRD volume in Notion"
+        assert "$794.0M" in payload["hud"]["body"]
         assert payload["holding"]["verdict"] == "AHEAD"
 
-        # Sync only patches computed finding fields, never clobbering Saved Question or Next Check
         assert len(sync_calls) == 1
         assert sync_calls[0]["include_finding"] is True
         assert sync_calls[0]["include_saved_question"] is False
@@ -313,7 +307,7 @@ async def test_notion_recompute_patch_omits_saved_question_and_next_check(
             return None
 
         def json(self) -> dict:
-            return {"id": "watchlist-nvda-1"}
+            return {"id": "watchlist-ntra-1"}
 
     class FakeAsyncClient:
         def __init__(self, **_kwargs) -> None:
@@ -332,14 +326,14 @@ async def test_notion_recompute_patch_omits_saved_question_and_next_check(
     monkeypatch.setattr("app.services.notion_sync.httpx.AsyncClient", FakeAsyncClient)
 
     holding = HoldingRecord(
-        ticker="NVDA",
-        company="NVIDIA Corp.",
+        ticker="NTRA",
+        company="Natera, Inc. (29.2%)",
         saved_question="Stale local question",
         verdict=Verdict.AHEAD,
-        latest_finding="Q3 FY27 revenue · $115.8bn.",
-        source_citation="Q3 FY27 PR · Nov 17",
+        latest_finding="Q3 rev $794.0M (+34% YoY).",
+        source_citation="NTRA Q3 2026 PR · Nov 5",
         next_check="Stale local next check",
-        notion_page_id="watchlist-nvda-1",
+        notion_page_id="watchlist-ntra-1",
     )
 
     page_id = await notion.sync_holding_update(
@@ -348,11 +342,11 @@ async def test_notion_recompute_patch_omits_saved_question_and_next_check(
         include_saved_question=False,
         include_next_check=False,
     )
-    assert page_id == "watchlist-nvda-1"
+    assert page_id == "watchlist-ntra-1"
     assert len(captured) == 1
     method, url, body = captured[0]
     assert method == "PATCH"
-    assert url.endswith("/pages/watchlist-nvda-1")
+    assert url.endswith("/pages/watchlist-ntra-1")
     props = body["properties"]
     assert set(props.keys()) == {"Status", "Latest Finding", "Source"}
     assert "Saved Question" not in props
@@ -365,34 +359,32 @@ def test_clearing_next_check_in_notion_clears_local_value_on_briefing_and_pull(
     """Clearing Next Check to empty string in Notion must clear stale local next_check on both refresh paths."""
     app = create_app(_make_settings(tmp_path, with_notion=True))
     runtime = app.state.runtime
-    runtime.db.update_holding_notion_page_id("NVDA", "watchlist-nvda-1")
-    runtime.db.update_holding_next_check("NVDA", "Old check to clear")
+    runtime.db.update_holding_notion_page_id("NTRA", "watchlist-ntra-1")
+    runtime.db.update_holding_next_check("NTRA", "Old check to clear")
 
     async def fake_pull_holdings():
         return {
-            "NVDA": NotionHoldingSnapshot(
-                ticker="NVDA",
-                saved_question="Does NVIDIA expect the margin trough to get deeper?",
+            "NTRA": NotionHoldingSnapshot(
+                ticker="NTRA",
+                saved_question="Is Natera's underlying gross margin expanding without revenue true-ups?",
                 next_check="",
-                notion_page_id="watchlist-nvda-1",
+                notion_page_id="watchlist-ntra-1",
             )
         }
 
     async def fake_sync_holding(holding, **_kwargs) -> str:
-        return holding.notion_page_id or "watchlist-nvda-1"
+        return holding.notion_page_id or "watchlist-ntra-1"
 
     runtime.notion.pull_holdings = fake_pull_holdings  # type: ignore[method-assign]
     runtime.notion.sync_holding_update = fake_sync_holding  # type: ignore[method-assign]
 
     with TestClient(app) as client:
-        # 1. Briefing refresh clears local next_check when Notion returns ""
-        brief = client.post("/api/text", json={"transcript": "Can we review NVIDIA earnings?"})
+        brief = client.post("/api/text", json={"transcript": "Can we review Natera earnings?"})
         assert brief.status_code == 200
         assert brief.json()["holding"]["next_check"] == ""
-        assert runtime.db.get_holding("NVDA").next_check == ""
+        assert runtime.db.get_holding("NTRA").next_check == ""
 
-        # 2. Manual /api/notion/pull also clears local next_check when Notion returns ""
-        runtime.db.update_holding_next_check("NVDA", "Another stale check")
+        runtime.db.update_holding_next_check("NTRA", "Another stale check")
         pulled = client.post("/api/notion/pull")
         assert pulled.status_code == 200
-        assert runtime.db.get_holding("NVDA").next_check == ""
+        assert runtime.db.get_holding("NTRA").next_check == ""

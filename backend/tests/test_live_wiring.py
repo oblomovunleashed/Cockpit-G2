@@ -38,8 +38,8 @@ async def test_jev_router_parses_live_openrouter_probability_schema(
                 "answers": {
                     "mind": {"type": "choice", "choice": "personal", "confidence": 0.96},
                     "action": {"type": "choice", "choice": "log_task", "confidence": 0.95},
-                    "holding": {"type": "choice", "choice": "TSM", "confidence": 0.99},
-                    "peer_holding": {"type": "choice", "choice": "TSM", "confidence": 0.99},
+                    "holding": {"type": "choice", "choice": "AMZN", "confidence": 0.99},
+                    "peer_holding": {"type": "choice", "choice": "AMZN", "confidence": 0.99},
                     "needs_llm_worker": {"type": "noul", "probability": 0.04},
                 },
                 "usage": {"input_tokens": 140, "output_tokens": 0, "cost": 0.000006},
@@ -62,8 +62,8 @@ async def test_jev_router_parses_live_openrouter_probability_schema(
 
     decision = await router.route_utterance(
         "Remember to buy a birthday present",
-        available_tickers=["NVDA", "MSFT", "TSM"],
-        active_ticker="NVDA",
+        available_tickers=["NTRA", "STX", "AMZN"],
+        active_ticker="NTRA",
     )
     assert decision.mode == "openrouter"
     assert decision.mind == Mind.PERSONAL
@@ -118,16 +118,16 @@ async def test_jev_live_select_best_chunk_respects_is_answered_probability(
 
     chunk = DocumentChunk(
         id=1,
-        ticker="NVDA",
-        doc_title="Q3 PR",
-        doc_date="2026-11-17",
+        ticker="NTRA",
+        doc_title="Q3 2026 Release",
+        doc_date="2026-11-05",
         page_ref="Q3 PR",
         topic="margin",
         headline="Margin",
         summary_card="Margin card",
         verdict=Verdict.HELD,
-        suggested_next_check="Check margins",
-        excerpt="Gross margin 71-72%",
+        suggested_next_check="Check ex-true-up gross margin",
+        excerpt="Ex-true-up non-GAAP gross margin 63.2%",
     )
     result = await router.select_best_chunk("Warranty reserves?", [chunk])
     assert result is None

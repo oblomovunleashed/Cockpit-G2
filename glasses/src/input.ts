@@ -362,7 +362,7 @@ export async function executeSwipeAction(
   state.lastSavedEntry = null;
   if (state.holdings.length > 0) {
     if (state.mode === 'HOME') {
-      // Entering watchlist from HOME starts at the current holding (NVDA 1/3) instead of skipping it
+      // Entering watchlist from HOME starts at the current holding (NTRA 1/3) instead of skipping it
       state.holdingIndex =
         ((state.holdingIndex % state.holdings.length) + state.holdings.length) %
         state.holdings.length;

@@ -4,213 +4,211 @@ from app.db import CockpitDB, utc_now_iso
 from app.models import HoldingRecord, Verdict
 
 
-NVDA_Q2_CALL_URL = (
-    "https://investor.nvidia.com/files/content_files/"
-    "TRANSCRIPT_-NVIDIA-Corp-NVDA-US-Q2-2027-Earnings-Call-26-August-2026-5_00-PM-ET.pdf"
-)
-NVDA_Q3_PR_URL = (
-    "https://investor.nvidia.com/news/press-release-details/2026/"
-    "NVIDIA-Announces-Financial-Results-for-Third-Quarter-Fiscal-2027/default.aspx"
-)
-TSM_Q3_PR_URL = "https://investor.tsmc.com/english/quarterly-results/2026/q3"
-MSFT_Q1_PR_URL = "https://www.microsoft.com/en-us/Investor/earnings/FY-2027-Q1/press-release-webcast"
+NTRA_Q3_PR_URL = "https://www.natera.com/company/news/"
+STX_Q1_PR_URL = "https://investors.seagate.com/"
+AMZN_Q3_PR_URL = "https://ir.aboutamazon.com/"
 
 
 # Verified prior-quarter guidance baselines for deterministic (zero-LLM) earnings_preview skill
 PRIOR_BASELINES: dict[str, str] = {
-    "NVDA": "Aug call baseline: Q3 rev guide $108bn; Q4 GM trough 71-72%; Q1 FY28 price hikes.",
-    "TSM": "Q3 2026 baseline: Q4 rev guide $52.3-54.3bn; Q4 GM 65.0-67.0%; FY26 capex $60-64bn.",
-    "MSFT": "Q1 FY27 baseline: Q2 Azure guide 49-50% CC; Q2 capex >$50bn (CY26 ~$170bn).",
+    "NTRA": "29.2% wt | Prior guide: FY26 rev $2.85-$2.91B; GM 64-66%; Q2 Signatera ASP ~$1,270.",
+    "STX": "9.1% wt | Q1 FY27 baseline: rev $4.23B, non-GAAP GM 57.8%; Q2 guide $4.8B rev, $9.20 EPS.",
+    "AMZN": "6.9% wt | Q3 2026 baseline: AWS $46.0B (+39.3% YoY); Q4 rev $240-$247B, op inc $28.5-$33.5B.",
 }
 
 
 SEED_HOLDINGS: list[HoldingRecord] = [
     HoldingRecord(
-        ticker="NVDA",
-        company="NVIDIA Corp.",
-        saved_question="Does NVIDIA expect the margin trough to get deeper?",
-        verdict=Verdict.HELD,
-        latest_finding=(
-            "Q4 FY27 gross margin guide · 71-72%. "
-            "Management had already flagged that range in August."
-        ),
-        source_citation="Q3 FY27 PR (Nov 17) & Q2 Call (Aug 26)",
-        suggested_next_check="Check whether Q1 FY28 price increases are on schedule",
-        next_check="",
-    ),
-    HoldingRecord(
-        ticker="TSM",
-        company="TSMC",
-        saved_question="Is the N2 ramp diluting gross margin below guidance?",
-        verdict=Verdict.HELD,
-        latest_finding=(
-            "Q3 2026 gross margin · 66.4% (vs 67.7% Q2) on N2 ramp (8% of wafers). "
-            "Q4 GM guided 65.0-67.0%."
-        ),
-        source_citation="TSMC Q3 2026 PR · Oct 15",
-        suggested_next_check="Check N2 margin dilution as N2 scales past 8% of wafer revenue",
-        next_check="",
-    ),
-    HoldingRecord(
-        ticker="MSFT",
-        company="Microsoft Corp.",
-        saved_question="Is Azure AI capacity growth accelerating despite delivery delays?",
+        ticker="NTRA",
+        company="Natera, Inc. (29.2%)",
+        saved_question="Is Natera's underlying gross margin expanding without revenue true-ups?",
         verdict=Verdict.AHEAD,
         latest_finding=(
-            "Q1 FY27 Azure grew 48% YoY (vs 44-45% guide); Q2 guided 49-50% CC "
-            "as AI demand outstrips supply."
+            "Q3 2026 GAAP GM 64.7%; ex-true-ups 63.2% (+140 bps QoQ on COGS gains). "
+            "True-ups fell to $32.3M vs $52.3M in Q2."
         ),
-        source_citation="MSFT Q1 FY27 PR · Oct 28",
-        suggested_next_check="Check whether Q2 capex exceeds $50bn as delayed racks arrive",
+        source_citation="NTRA Q3 2026 PR & Call · Nov 5",
+        suggested_next_check="Check whether Signatera ASP holds above $1,290 and MolDX coverage expands in Q4",
+        next_check="",
+    ),
+    HoldingRecord(
+        ticker="STX",
+        company="Seagate Technology Holdings plc (9.1%)",
+        saved_question="Is Seagate's HAMR Mozaic ramp sustaining gross margin expansion?",
+        verdict=Verdict.AHEAD,
+        latest_finding=(
+            "Q1 FY27 rev $4.23B (+61% YoY), non-GAAP GM 57.8% (vs 39.4% YoY). "
+            "Azure qualified Mozaic HAMR; Q2 rev guided $4.8B."
+        ),
+        source_citation="STX Q1 FY27 PR · Oct 27",
+        suggested_next_check="Check Q2 Mozaic 44TB mix and whether non-GAAP GM expands further above 57.8%",
+        next_check="",
+    ),
+    HoldingRecord(
+        ticker="AMZN",
+        company="Amazon.com, Inc. (6.9%)",
+        saved_question="Is AWS growth accelerating enough to justify 2026 AI capex?",
+        verdict=Verdict.AHEAD,
+        latest_finding=(
+            "Q3 AWS rev $46.0B (+39.3% YoY, $184B run rate), op margin 38.7%; "
+            "record $28.1B op inc. FY26 capex reiterated ~$220B."
+        ),
+        source_citation="AMZN Q3 2026 PR · Oct 29",
+        suggested_next_check="Check whether AWS sustains >35% YoY growth as $220B FY26 AI capex comes online",
         next_check="",
     ),
 ]
 
 
 SEED_CHUNKS: list[dict[str, str]] = [
-    # NVIDIA — Q2 FY27 Call (Aug 26, 2026) & Q3 FY27 Release (Nov 17, 2026)
+    # Natera (NTRA · 29.22% weight) — Q3 2026 Release & Call (Nov 5, 2026)
     {
-        "ticker": "NVDA",
-        "doc_title": "NVIDIA Q3 FY27 Earnings Release",
-        "doc_date": "2026-11-17",
-        "page_ref": "Q3 FY27 PR · Nov 17",
-        "topic": "gross margin trough guidance outlook Q4 FY27",
-        "headline": "Q4 FY27 gross margin guide: 71-72%",
+        "ticker": "NTRA",
+        "doc_title": "Natera Q3 2026 Earnings Release & Call",
+        "doc_date": "2026-11-05",
+        "page_ref": "NTRA Q3 2026 PR · Nov 5",
+        "topic": "gross margin underlying true-ups COGS efficiency Q3 2026 profitability",
+        "headline": "Q3 GAAP GM 64.7%; ex-true-ups 63.2% (+140 bps QoQ)",
         "summary_card": (
-            "Q4 FY27 gross margin guide · 71-72%. "
-            "Management had already flagged that range in August."
-        ),
-        "verdict": Verdict.HELD.value,
-        "suggested_next_check": "Check whether Q1 FY28 price increases are on schedule",
-        "excerpt": (
-            "Q4 FY27 GAAP and non-GAAP gross margins are expected to be 71% to 72%, "
-            "consistent with the margin trough range management previously communicated "
-            "on the August 26 Q2 FY27 earnings call."
-        ),
-        "source_url": NVDA_Q3_PR_URL,
-    },
-    {
-        "ticker": "NVDA",
-        "doc_title": "NVIDIA Q3 FY27 Earnings Release",
-        "doc_date": "2026-11-17",
-        "page_ref": "Q3 FY27 PR · Nov 17",
-        "topic": "revenue beat guidance midpoint growth Q3 FY27 top line sales",
-        "headline": "Q3 FY27 revenue: $115.8bn (+7% vs guide)",
-        "summary_card": (
-            "Q3 FY27 revenue · $115.8bn. "
-            "About 7% above the company's $108bn guidance midpoint."
+            "Q3 2026 GAAP GM 64.7%; ex-true-ups 63.2% (+140 bps QoQ on COGS gains). "
+            "True-ups fell to $32.3M vs $52.3M in Q2."
         ),
         "verdict": Verdict.AHEAD.value,
-        "suggested_next_check": "Check whether Q4 data center shipment mix sustains the beat",
+        "suggested_next_check": "Check whether ex-true-up gross margin keeps expanding above 63.2% in Q4",
         "excerpt": (
-            "NVIDIA reported Q3 FY27 revenue of $115.8 billion, roughly 7% ahead of "
-            "management's $108 billion guidance midpoint provided in August."
+            "Natera reported Q3 2026 GAAP gross margin of 64.7% and underlying non-GAAP gross margin "
+            "excluding revenue true-ups of 63.2%, improving roughly 140 basis points sequentially from Q2 2026 "
+            "on COGS efficiencies as revenue true-ups declined to $32.3 million from $52.3 million in Q2. "
+            "Full-year 2026 gross margin guidance remained 64% to 66%."
         ),
-        "source_url": NVDA_Q3_PR_URL,
+        "source_url": NTRA_Q3_PR_URL,
     },
     {
-        "ticker": "NVDA",
-        "doc_title": "NVIDIA Q2 FY27 Earnings Call Transcript",
-        "doc_date": "2026-08-26",
-        "page_ref": "Aug FY27 Call · p. 7",
-        "topic": "margin recovery bring margins back up price increases Q1 FY28",
-        "headline": "Margin recovery driver: Q1 FY28 price increases",
+        "ticker": "NTRA",
+        "doc_title": "Natera Q3 2026 Earnings Release",
+        "doc_date": "2026-11-05",
+        "page_ref": "NTRA Q3 2026 PR · Nov 5",
+        "topic": "revenue growth Signatera oncology test volume full year guidance raise beat sales",
+        "headline": "Q3 rev $794M (+34% YoY); Signatera oncology +61% YoY; FY26 guide raised $140M",
         "summary_card": (
-            "Aug call p. 7: management expects gross margins to recover as "
-            "planned price increases take effect in Q1 FY28."
+            "Q3 rev $794.0M (+34% YoY); oncology tests 339.5k (+61% YoY). "
+            "FY26 guide raised $140M at mid to $3.005-$3.035B."
+        ),
+        "verdict": Verdict.AHEAD.value,
+        "suggested_next_check": "Check whether Signatera clinical MRD test volumes maintain >50% YoY growth in Q4",
+        "excerpt": (
+            "Natera generated Q3 2026 total revenue of $794.0 million (+34.1% YoY vs $592.2 million), "
+            "processing ~1,093,100 total tests (+22.3% YoY) including ~339,500 oncology tests (+60.9% YoY). "
+            "Management raised full-year 2026 revenue guidance by $140 million at the midpoint from "
+            "$2.850-$2.910 billion to $3.005-$3.035 billion."
+        ),
+        "source_url": NTRA_Q3_PR_URL,
+    },
+    {
+        "ticker": "NTRA",
+        "doc_title": "Natera Q3 2026 Earnings Call Transcript",
+        "doc_date": "2026-11-05",
+        "page_ref": "NTRA Q3 2026 Call · Nov 5",
+        "topic": "Signatera ASP average selling price reimbursement MolDX cash flow FCF balance sheet",
+        "headline": "Signatera ASP rose to ~$1,290; cash up $5.7M to $1.10B (FCF positive)",
+        "summary_card": (
+            "Q3 call: Signatera ASP rose to ~$1,290 (vs $1,270 Q2) on MolDX/coverage wins; "
+            "cash grew $5.7M to $1.10B, FCF-positive."
         ),
         "verdict": Verdict.WATCH.value,
-        "suggested_next_check": "At next call, check whether Q1 FY28 price increases are on schedule",
+        "suggested_next_check": "Check whether Signatera ASP holds above $1,290 and MolDX coverage expands in Q4",
         "excerpt": (
-            "On page 7 of the August 26 Q2 FY27 earnings call transcript, management "
-            "noted that gross margin recovery back above the trough is expected to be "
-            "driven by price increases scheduled to take effect in Q1 FY28."
+            "On the November 5 Q3 2026 earnings call, management reported Signatera ASP rose to ~$1,290 "
+            "(up from ~$1,270 in Q2 2026) supported by expanding reimbursement, early-stage liver cancer "
+            "surveillance, and MolDX milestones. Natera was cash-flow positive, lifting total cash to "
+            "$1,097.2 million (+$5.7 million QoQ) while narrowing GAAP net loss to $59.9 million (-$0.42/sh)."
         ),
-        "source_url": f"{NVDA_Q2_CALL_URL}#page=7",
+        "source_url": NTRA_Q3_PR_URL,
     },
-    # TSMC — Q3 2026 Earnings Release & Call (Oct 15, 2026)
+    # Seagate (STX · 9.07% weight) — Q1 FY27 Release & Call (Oct 27, 2026)
     {
-        "ticker": "TSM",
-        "doc_title": "TSMC Q3 2026 Earnings Release",
-        "doc_date": "2026-10-15",
-        "page_ref": "TSMC Q3 2026 PR · Oct 15",
-        "topic": "N2 2nm ramp gross margin dilution guidance Q4 wafer",
-        "headline": "Q3 gross margin 66.4%; Q4 guided 65.0-67.0%",
+        "ticker": "STX",
+        "doc_title": "Seagate Q1 FY27 Earnings Release",
+        "doc_date": "2026-10-27",
+        "page_ref": "STX Q1 FY27 PR · Oct 27",
+        "topic": "revenue gross margin EPS guidance Q2 FY27 pricing profitability",
+        "headline": "Q1 FY27 rev $4.23B (+61% YoY); non-GAAP GM 57.8%; Q2 guide $4.8B",
         "summary_card": (
-            "Q3 2026 gross margin · 66.4% (vs 67.7% Q2) on N2 ramp (8% of wafers). "
-            "Q4 GM guided 65.0-67.0%."
-        ),
-        "verdict": Verdict.HELD.value,
-        "suggested_next_check": "Check N2 margin dilution as N2 scales past 8% of wafer revenue",
-        "excerpt": (
-            "TSMC reported Q3 2026 gross margin of 66.4%, down modestly from 67.7% in Q2 "
-            "due to initial high-volume N2 (2nm) ramp dilution as N2 reached 8% of wafer revenue. "
-            "Management guided Q4 2026 gross margin to 65.0%-67.0%."
-        ),
-        "source_url": TSM_Q3_PR_URL,
-    },
-    {
-        "ticker": "TSM",
-        "doc_title": "TSMC Q3 2026 Earnings Release & Call",
-        "doc_date": "2026-10-15",
-        "page_ref": "TSMC Q3 2026 Call · Oct 15",
-        "topic": "AI HPC CoWoS packaging capacity demand supply revenue guidance capex accelerators",
-        "headline": "Q3 rev $46.72bn (+41% YoY); Q4 guide $52.3-54.3bn; CoWoS maxed",
-        "summary_card": (
-            "Q3 rev $46.72bn (+41% YoY); Q4 guided $52.3-54.3bn. "
-            "AI/CoWoS demand still far outpaces supply ($60-64bn FY26 capex)."
+            "Q1 FY27 rev $4.23B (+61% YoY), non-GAAP GM 57.8% (vs 39.4% YoY). "
+            "Q2 FY27 guided $4.8B rev and $9.20 EPS."
         ),
         "verdict": Verdict.AHEAD.value,
-        "suggested_next_check": "Track CoWoS packaging bottlenecks and N3/N2 wafer pricing into 2027",
+        "suggested_next_check": "Check whether Q2 FY27 revenue hits $4.8B and non-GAAP GM expands above 57.8%",
         "excerpt": (
-            "TSMC posted Q3 2026 revenue of $46.72 billion (+41.2% YoY), with HPC/AI accelerators "
-            "at 68% of net revenue, and guided Q4 revenue to $52.3-$54.3 billion (~58% YoY). "
-            "Chairman C.C. Wei reiterated AI demand dramatically outpaces CoWoS advanced packaging "
-            "and leading-edge wafer supply, backed by $60-$64 billion in FY26 capex."
+            "Seagate reported Q1 FY27 revenue of $4.23 billion (+61% YoY vs $2.63 billion), GAAP gross "
+            "margin of 57.3% (up from 39.4% YoY), non-GAAP gross margin of 57.8%, and non-GAAP EPS of $7.68. "
+            "Management guided Q2 FY27 revenue to $4.8 billion (+/- $0.1B) and non-GAAP EPS to $9.20 (+/- $0.20)."
         ),
-        "source_url": TSM_Q3_PR_URL,
+        "source_url": STX_Q1_PR_URL,
     },
-    # Microsoft — Q1 FY27 Earnings Release & Call (Oct 28, 2026)
     {
-        "ticker": "MSFT",
-        "doc_title": "Microsoft Q1 FY27 Earnings Release",
-        "doc_date": "2026-10-28",
-        "page_ref": "MSFT Q1 FY27 PR · Oct 28",
-        "topic": "Azure cloud AI capacity growth acceleration guidance constant currency",
-        "headline": "Q1 FY27 Azure +48% YoY; Q2 guided 49-50% CC",
+        "ticker": "STX",
+        "doc_title": "Seagate Q1 FY27 Earnings Call",
+        "doc_date": "2026-10-27",
+        "page_ref": "STX Q1 FY27 Call · Oct 27",
+        "topic": "HAMR Mozaic 44TB Azure qualification nearline exabytes data center supply allocation 2028",
+        "headline": "Azure qualified Mozaic HAMR; 198 EB nearline shipped; supply allocated through 2028",
         "summary_card": (
-            "Q1 FY27 Azure grew 48% YoY (vs 44-45% guide); Q2 guided 49-50% CC "
-            "as AI demand outstrips supply."
+            "Azure qualified Mozaic HAMR (up to 44TB); record 198 EB nearline shipped "
+            "(DC rev $3.4B, +63% YoY); supply allocated to 2028."
         ),
         "verdict": Verdict.AHEAD.value,
-        "suggested_next_check": "Check whether Azure sustains 49-50% growth as new racks come online",
+        "suggested_next_check": "Track additional hyperscaler Mozaic 44TB qualifications and 2028 supply pricing",
         "excerpt": (
-            "Microsoft Q1 FY27 revenue reached $92.3 billion (+19% YoY). Azure and cloud services "
-            "grew 48% YoY to $33.17 billion, beating prior 44%-45% guidance, with Q2 FY27 Azure "
-            "growth guided to accelerate further to 49%-50% in constant currency as AI demand exceeds supply."
+            "Data center revenue reached $3.4 billion (+63% YoY, 81% of total) on a record 198 exabytes "
+            "of nearline capacity shipped. Microsoft Azure officially qualified Seagate's HAMR-based Mozaic "
+            "platform (up to 44TB tiers), and management noted nearline supply is largely committed under "
+            "long-term hyperscaler agreements extending through calendar 2028."
         ),
-        "source_url": MSFT_Q1_PR_URL,
+        "source_url": STX_Q1_PR_URL,
+    },
+    # Amazon (AMZN · 6.86% weight) — Q3 2026 Release & Call (Oct 29, 2026)
+    {
+        "ticker": "AMZN",
+        "doc_title": "Amazon Q3 2026 Earnings Release",
+        "doc_date": "2026-10-29",
+        "page_ref": "AMZN Q3 2026 PR · Oct 29",
+        "topic": "AWS cloud revenue growth operating margin income Trainium Bedrock Q3 2026",
+        "headline": "AWS $46.0B (+39.3% YoY, 38.7% margin); record $28.1B op income",
+        "summary_card": (
+            "Q3 AWS rev $46.0B (+39.3% YoY, $184B run rate), op margin 38.7%; "
+            "consolidated op income record $28.1B (13.9% margin)."
+        ),
+        "verdict": Verdict.AHEAD.value,
+        "suggested_next_check": "Check whether AWS sustains >35% YoY growth and ~38% operating margin in Q4",
+        "excerpt": (
+            "Amazon posted Q3 2026 net sales of $201.9 billion (+12% YoY) and record operating income of "
+            "$28.1 billion (+61% YoY, 13.9% margin). AWS net sales accelerated to $46.0 billion (+39.3% YoY, "
+            "$184 billion annualized run rate) with $17.8 billion operating income (38.7% margin) driven by "
+            "AI infrastructure demand, Trainium custom silicon, and Bedrock."
+        ),
+        "source_url": AMZN_Q3_PR_URL,
     },
     {
-        "ticker": "MSFT",
-        "doc_title": "Microsoft Q1 FY27 Earnings Call",
-        "doc_date": "2026-10-28",
-        "page_ref": "MSFT Q1 FY27 Call · Oct 28",
-        "topic": "capex capital expenditure GPU GB300 racks delivery delays infrastructure spending",
-        "headline": "Q1 capex $45.2bn on delivery slips; Q2 guided >$50bn",
+        "ticker": "AMZN",
+        "doc_title": "Amazon Q3 2026 Earnings Call",
+        "doc_date": "2026-10-29",
+        "page_ref": "AMZN Q3 2026 Call · Oct 29",
+        "topic": "capex capital expenditure AWS AI data center storage infrastructure Q4 guidance cash flow",
+        "headline": "FY26 cash capex reiterated ~$220B for AWS AI data centers; Q4 rev $240-$247B",
         "summary_card": (
-            "Q1 FY27 capex $45.2bn (slipped deliveries, not demand); "
-            "Q2 guided >$50bn with faster GB300 rack dock-to-live."
+            "FY26 cash capex reiterated ~$220B mostly for AWS AI data centers "
+            "(TTM FCF -$42.4B); Q4 guide $240-$247B rev, $28.5-$33.5B op inc."
         ),
         "verdict": Verdict.WATCH.value,
-        "suggested_next_check": "Check whether Q2 capex exceeds $50bn and GB300 rack deliveries catch up",
+        "suggested_next_check": "Track 2027 AWS data-center capex trajectory and nearline storage pull-through",
         "excerpt": (
-            "Q1 FY27 capital expenditures totaled $45.2 billion, below ~$50.6 billion consensus due to "
-            "slipped third-party capacity deliveries rather than demand softness. CFO Amy Hood guided "
-            "Q2 capex above $50 billion (targeting ~$170 billion in CY26) and highlighted faster "
-            "dock-to-live deployment for GB300 GPU racks alongside Maia/Cobalt silicon."
+            "Amazon reiterated full-year 2026 cash capital expenditures of approximately $220 billion, "
+            "overwhelmingly directed toward scaling AWS AI data centers, custom silicon, and cloud storage "
+            "capacity (pushing TTM free cash flow to -$42.4 billion). Q4 2026 net sales were guided to "
+            "$240.0-$247.0 billion (+12%-16% YoY) with operating income of $28.5-$33.5 billion."
         ),
-        "source_url": MSFT_Q1_PR_URL,
+        "source_url": AMZN_Q3_PR_URL,
     },
 ]
 
@@ -221,8 +219,9 @@ def seed_if_empty(db: CockpitDB) -> None:
         for holding in SEED_HOLDINGS:
             db.upsert_holding(holding.model_copy(update={"updated_at": now}))
     else:
-        # Idempotently migrate any legacy placeholder holdings from earlier versions
-        # while preserving saved_question, next_check, notion_page_id, and journal entries.
+        migrated = db.migrate_legacy_demo_portfolio(SEED_HOLDINGS, SEED_CHUNKS)
+        if migrated:
+            return
         for holding in SEED_HOLDINGS:
             db.migrate_placeholder_holding(holding)
 

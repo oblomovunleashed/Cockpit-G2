@@ -28,6 +28,7 @@ from app.models import (
     UtteranceRequest,
     UtteranceResponse,
 )
+from app.portfolio import PORTFOLIO_POSITIONS, format_weight_badge
 from app.seed import seed_if_empty
 from app.services.jev_router import JevRouter, heuristic_needs_enrichment
 from app.services.job_runner import AsyncJobQueue, BackgroundJobRunner
@@ -361,13 +362,17 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         # --------------------------------------------------------------
         if decision.action == ActionType.EARNINGS_PREVIEW:
             if decision.holding is None and decision.requested_company:
+                weight_label = format_weight_badge(decision.requested_company)
                 resolved_ticker, finding, source_label, draft = await worker.synthesize_adhoc_earnings(
                     company_query=decision.requested_company,
                     mode="preview",
                     utterance=transcript,
+                    portfolio_weight_label=weight_label,
                 )
+                wt_label = weight_label or format_weight_badge(resolved_ticker)
+                ticker_badge = f"{resolved_ticker} ({wt_label})" if wt_label else resolved_ticker
                 hud = HudCard(
-                    header=_clip(f"PREVIEW · {resolved_ticker} · WEB", 60),
+                    header=_clip(f"PREVIEW · {ticker_badge} · WEB", 60),
                     body=_clip(f"{finding}\n[Web: {source_label}]", 240),
                     footer="Tap: save watchpoint · Swipe: watchlist",
                 )
@@ -384,7 +389,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             if not raw_ticker:
                 hud = HudCard(
                     header="WORK · WHICH COMPANY?",
-                    body="Name any company to preview (e.g. NVIDIA, Alphabet, TSMC) or swipe into your watchlist.",
+                    body="Name any company to preview (e.g. Natera, Seagate, Insmed, Alphabet) or swipe into your watchlist.",
                     footer="Hold: ask with company · Swipe: watchlist",
                 )
                 return UtteranceResponse(
@@ -410,10 +415,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             )
 
         # --------------------------------------------------------------
-        # WORK SKILL 2 (TIER 1 + TIER 2): PEER READ-ACROSS (e.g. TSM -> NVDA)
+        # WORK SKILL 2 (TIER 1 + TIER 2): PEER READ-ACROSS (e.g. AMZN -> STX)
         # --------------------------------------------------------------
         if decision.action == ActionType.PEER_READ_ACROSS:
-            target_ticker = (decision.holding or active_ticker or (tickers[0] if tickers else "NVDA")).upper()
+            target_ticker = (decision.holding or active_ticker or (tickers[0] if tickers else "STX")).upper()
             target_holding = await refresh_holding_from_notion(target_ticker) or db.get_holding(target_ticker)
             if target_holding is None:
                 raise HTTPException(status_code=404, detail=f"Holding not found: {target_ticker}")
@@ -424,7 +429,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 hud = HudCard(
                     header=_clip(f"WORK · PEER READ · {target_ticker}", 60),
                     body=_clip(f"Specify a peer to read across to {target_ticker} (available: {peers}).", 240),
-                    footer="Hold: e.g. 'Read-across from TSMC to NVIDIA'",
+                    footer="Hold: e.g. 'What does Amazon capex mean for Seagate?'",
                 )
                 return UtteranceResponse(
                     transcript=transcript,
@@ -532,19 +537,23 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             )
 
         # --------------------------------------------------------------
-        # WORK SKILL 3: AD-HOC WEB EARNINGS REVIEW / FOLLOW-UP (NON-HELD)
+        # WORK SKILL 3: AD-HOC WEB EARNINGS REVIEW / FOLLOW-UP (PORTFOLIO OR EXTERNAL)
         # --------------------------------------------------------------
         if decision.holding is None and decision.requested_company:
             mode = "followup" if decision.action == ActionType.FOLLOW_UP_SOURCE else "review"
+            weight_label = format_weight_badge(decision.requested_company)
             resolved_ticker, finding, source_label, draft = await worker.synthesize_adhoc_earnings(
                 company_query=decision.requested_company,
                 mode=mode,
                 utterance=transcript,
+                portfolio_weight_label=weight_label,
             )
+            wt_label = weight_label or format_weight_badge(resolved_ticker)
+            ticker_badge = f"{resolved_ticker} ({wt_label})" if wt_label else resolved_ticker
             hud = HudCard(
-                header=_clip(f"WORK · {resolved_ticker} · WEB", 60),
+                header=_clip(f"WORK · {ticker_badge} · WEB", 60),
                 body=_clip(f"{finding}\n[Web: {source_label}]", 240),
-                footer="Tap: save watchpoint · Swipe: deck",
+                footer="Tap: save watchpoint · Swipe: watchlist",
             )
             return UtteranceResponse(
                 transcript=transcript,
@@ -562,7 +571,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if not raw_ticker:
             hud = HudCard(
                 header="WORK · WHICH COMPANY?",
-                body="Name any company (e.g. NVIDIA, Alphabet, TSMC) or swipe into your watchlist.",
+                body="Name any company (e.g. Natera, Seagate, Insmed, Alphabet) or swipe into your watchlist.",
                 footer="Hold: ask with company · Swipe: watchlist",
             )
             return UtteranceResponse(
@@ -660,6 +669,21 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.get("/api/holdings", response_model=list[HoldingRecord])
     async def list_holdings() -> list[HoldingRecord]:
         return db.list_holdings()
+
+    @app.get("/api/portfolio")
+    async def list_full_portfolio() -> dict[str, object]:
+        return {
+            "total_positions": len(PORTFOLIO_POSITIONS),
+            "total_weight_pct": round(sum(p.weight_pct for p in PORTFOLIO_POSITIONS), 2),
+            "positions": [
+                {
+                    "ticker": p.ticker,
+                    "company": p.company,
+                    "weight_pct": p.weight_pct,
+                }
+                for p in PORTFOLIO_POSITIONS
+            ],
+        }
 
     @app.patch("/api/holdings/{ticker}/question")
     async def update_holding_question(ticker: str, body: UpdateQuestionRequest) -> dict[str, object]:

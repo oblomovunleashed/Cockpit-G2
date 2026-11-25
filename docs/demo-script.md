@@ -2,7 +2,7 @@
 
 ## Split-Screen Recording Layout
 - **Left half:** Even Hub G2 Simulator (`make sim`) displaying the live `576 × 288` monochrome green G2 lens + Cockpit Companion trace (`mind`, `skill`, `llm_worker`, `post_enrich`, latency & cost).
-- **Right half:** Live Notion workspace showing **`Cockpit Log`** (with `Enrichment`, `Enriched`, `Due Date`, `Link`) and **`Holdings Watchlist`** (`NVDA`, `MSFT`, `TSM`).
+- **Right half:** Live Notion workspace showing **`Cockpit Log`** (with `Enrichment`, `Enriched`, `Due Date`, `Link`) and **`Holdings Watchlist`** (`NTRA 29.2%`, `STX 9.1%`, `AMZN 6.9%`).
 
 ## Shot List (Target: 2m 45s · Hard Limit: 3m 00s)
 
@@ -14,17 +14,17 @@
    - Briefly **`Swipe`** on the `CONFIRM` card to show in-place destination cycling (`Interests Note` → `Personal Task` → back to `Interests Note`), then **`Tap`** to save.
    - Show `INTERESTS | SAVED | ENRICHING` on G2 once the Notion write returns → seconds later, background worker patches the Notion row (`Enriched: Seinfeld episode` + provider-cited `acquired.fm` URL) and updates the lens in place to **`INTERESTS | ENRICHED`**. **`Tap`** returns calmly to `HOME`.
    - Utterance 2: *"Remember to buy a birthday present next Friday."* → 1-tap confirm → logs to Notion `Cockpit Log` with `Due Date` resolved locally (`2026-12-04`). *(Optional: show 1-swipe **Undo** removing locally and archiving the Notion page.)*
-3. **0:55–1:45 · “LLM Worker” — NVIDIA Earnings Review + 2-Tap Verified Write**
-   - *"Can we review NVIDIA earnings?"* → Jev wakes System-2 DeepSeek (`Work · BRIEF_HOLDING`).
-   - G2 shows the card tailored to your saved question (*"Does NVIDIA expect the margin trough to get deeper?"*):
-     `Q4 FY27 gross margin guide | 71-72%. Management had already flagged that range in August.` `[Q3 FY27 PR · Nov 17]`
-   - Follow-up: *"What did management expect to bring margins back up?"* → retrieves August call `p. 7` (Q1 FY28 price increases).
-   - **Tap once** to preview exact proposed wording on `WORK | NVDA | CONFIRM CHECK` → **Tap again** to commit live to Notion `Cockpit Log` + `Holdings Watchlist` (`Next Check`).
+3. **0:55–1:45 · “LLM Worker” — Natera (`29.2%` #1 Holding) Earnings Review + 2-Tap Verified Write**
+   - *"Can we review Natera earnings?"* → Jev wakes System-2 DeepSeek (`Work · BRIEF_HOLDING`).
+   - G2 shows the card tailored to your saved question (*"Is Natera's underlying gross margin expanding without revenue true-ups?"*):
+     `Q3 2026 GAAP GM 64.7%; ex-true-ups 63.2% (+140 bps QoQ on COGS gains). True-ups fell to $32.3M vs $52.3M in Q2.` `[NTRA Q3 2026 PR · Nov 5]`
+   - Follow-up: *"What drove Signatera ASP and cash flow?"* → retrieves Q3 call passage (`Signatera ASP ~$1,290 vs $1,270 Q2; cash +$5.7M to $1.10B, FCF-positive`).
+   - **Tap once** to preview exact proposed wording on `WORK | NTRA | CONFIRM CHECK` → **Tap again** to commit live to Notion `Cockpit Log` + `Holdings Watchlist` (`Next Check`).
 4. **1:45–2:15 · “One Release, Two Different Glances” (Live Notion Edit)**
-   - Edit `NVDA`'s `Saved Question` directly in Notion to *"Is revenue running ahead of management's guidance?"* and click **`Pull Notion`**.
-   - `NOTION | UPDATED` → tap to see the exact same NVIDIA Q3 FY27 release flip to `Q3 FY27 revenue | $115.8bn (+7% vs $108bn guide)`.
-5. **2:15–2:45 · Work Skills (Held & Non-Held) + Architecture Close**
-   - **`Preview NVIDIA`** (Tier-0 local render `< 5 ms`, zero LLM call; end-to-end spoken flow adds STT + Jev + Notion pull) → **`Peer Read: TSMC → NVIDIA`** (cross-company Oct 2026 CoWoS read-across) → **`Preview Alphabet earnings`** (`PREVIEW | GOOGL | WEB` — works whether held or not held!).
+   - Edit `NTRA`'s `Saved Question` directly in Notion to *"Is Signatera volume and revenue running ahead of full-year guidance?"* and click **`Pull Notion`**.
+   - `NOTION | UPDATED` → tap to see the exact same Natera Q3 2026 release flip to `Q3 rev $794.0M (+34% YoY); oncology tests 339.5k (+61% YoY). FY26 guide raised $140M at mid to $3.005-$3.035B.`
+5. **2:15–2:45 · Portfolio-Wide Work Skills (`AMZN → STX`, `INSM 4.2%`, Non-Held Names) + Close**
+   - **`Preview Natera`** (Tier-0 local render `< 5 ms`, zero LLM call; end-to-end spoken flow adds STT + Jev + Notion pull) → **`Peer Read: Amazon → Seagate`** (connects Amazon's `$220B` FY26 AWS AI capex directly to Seagate's `9.1%` HAMR Mozaic holding) → **`Preview Insmed earnings`** (`PREVIEW | INSM (4.2%) | WEB` — shows exact weight from the 61-position portfolio; external names like Alphabet work identically).
    - Close on safety & stack: Even Hub SDK `0.0.16` (desktop `.ehpk` packed), OpenRouter STT + Jev + DeepSeek Web, Notion 2-way sync; strictly read-only financial inputs and human-confirmed writes only.
 
 ---

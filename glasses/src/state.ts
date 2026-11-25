@@ -53,7 +53,7 @@ export function createInitialState(): CockpitState {
 
 /**
  * Returns the currently focused holding ONLY when the wearer is actively viewing
- * the Work watchlist or has a tracked holding in focus — never leaks NVDA from HOME.
+ * the Work watchlist or has a tracked holding in focus — never leaks NTRA from HOME.
  */
 export function activeHolding(state: CockpitState): HoldingRecord | null {
   if (state.holdings.length === 0) return null;

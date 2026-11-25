@@ -11,11 +11,13 @@ STOPWORDS = {
     "did", "are", "was", "were", "have", "has", "about", "into", "their", "company",
     "management", "expect", "expected", "running", "get", "your", "our", "next",
     "not", "near", "how", "why", "will", "can", "should", "would", "could", "they",
-    "its", "their", "there", "these", "those", "any", "all",
+    "its", "there", "these", "those", "any", "all",
 }
 
 ENTITY_TOKENS = {
-    "nvda", "nvidia", "msft", "microsoft", "tsm", "tsmc", "corp", "inc", "ltd",
+    "ntra", "natera", "stx", "seagate", "amzn", "amazon",
+    "nvda", "nvidia", "msft", "microsoft", "tsm", "tsmc",
+    "corp", "inc", "ltd", "plc", "holdings",
 }
 
 

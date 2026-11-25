@@ -6,10 +6,14 @@ import httpx
 
 from app.config import Settings
 from app.models import ActionType, DocumentChunk, JevDecision, Mind, Verdict
+from app.portfolio import match_portfolio_position_in_text
 from app.services.retrieval import extract_content_tokens
 
 
 TRACKED_ALIASES: dict[str, tuple[str, ...]] = {
+    "NTRA": ("ntra", "natera", "signatera"),
+    "STX": ("stx", "seagate", "seagate technology", "mozaic", "hamr"),
+    "AMZN": ("amzn", "amazon", "aws"),
     "NVDA": ("nvda", "nvidia"),
     "MSFT": ("msft", "microsoft", "azure"),
     "TSM": ("tsm", "tsmc", "taiwan semiconductor"),
@@ -21,14 +25,14 @@ KNOWN_UNTRACKED_COMPANIES: dict[str, str] = {
     "google": "Alphabet (GOOGL)",
     "googl": "Alphabet (GOOGL)",
     "goog": "Alphabet (GOOGL)",
+    "nvidia": "NVIDIA (NVDA)",
+    "nvda": "NVIDIA (NVDA)",
+    "microsoft": "Microsoft (MSFT)",
+    "msft": "Microsoft (MSFT)",
     "apple": "Apple (AAPL)",
     "aapl": "Apple (AAPL)",
-    "amazon": "Amazon (AMZN)",
-    "amzn": "Amazon (AMZN)",
     "meta": "Meta Platforms (META)",
     "facebook": "Meta Platforms (META)",
-    "tesla": "Tesla (TSLA)",
-    "tsla": "Tesla (TSLA)",
     "amd": "AMD",
     "broadcom": "Broadcom (AVGO)",
     "avgo": "Broadcom (AVGO)",
@@ -40,12 +44,9 @@ KNOWN_UNTRACKED_COMPANIES: dict[str, str] = {
     "oracle": "Oracle (ORCL)",
     "orcl": "Oracle (ORCL)",
     "salesforce": "Salesforce (CRM)",
-    "palantir": "Palantir (PLTR)",
-    "pltr": "Palantir (PLTR)",
     "uber": "Uber (UBER)",
     "spotify": "Spotify (SPOT)",
     "novo nordisk": "Novo Nordisk (NVO)",
-    "eli lilly": "Eli Lilly (LLY)",
     "jpmorgan": "JPMorgan Chase (JPM)",
     "berkshire": "Berkshire Hathaway (BRK.B)",
     "costco": "Costco (COST)",
@@ -131,8 +132,8 @@ class JevRouter:
     Decides fast, typed routing on every utterance:
       - Fast path ("logged, logged"): Personal task or Interests note -> NO blocking LLM on glasses
         (optional async post-confirm enrichment when Jev flags `needs_enrichment`).
-      - Deep path ("llm worker"): Work thesis review, follow-up, peer read-across, or ad-hoc
-        earnings preview/review for any non-watchlist company -> wakes System-2 worker.
+      - Deep path ("llm worker"): Work thesis review, follow-up, peer read-across, or web-grounded
+        earnings preview/review for any other portfolio holding or external company.
     Includes a deterministic local fallback when COCKPIT_MOCK_MODE=true or no API key is set.
     """
 
@@ -164,12 +165,12 @@ class JevRouter:
             ticker_criteria[t] = f"The wearer explicitly referred to {label} earnings or research."
 
         ticker_criteria["untracked"] = (
-            "The wearer explicitly named a company or stock ticker that is NOT in the tracked watchlist "
-            "(for example Alphabet/Google, Apple, Amazon, Meta, Tesla, AMD, ASML, Broadcom, etc.)."
+            "The wearer explicitly named a company or stock ticker that is NOT in the indexed watchlist "
+            "(for example Insmed/INSM, Fox/FOXA, Sea Limited/SE, Alphabet/GOOGL, Apple/AAPL, TSMC, etc.)."
         )
         ticker_criteria["implicit_active"] = (
             "The wearer did NOT name any company and is referring implicitly to the currently displayed holding "
-            "(for example 'what changed?', 'preview this one', 'what did management say about margins?')."
+            "(for example 'what changed?', 'preview this one', 'what drove ASP and cash flow?')."
         )
         ticker_criteria["none"] = "Not about any company or stock."
 
@@ -182,7 +183,7 @@ class JevRouter:
         state_lines = [
             f"Utterance: {transcript}",
             f"Currently displayed holding on glasses: {active_ticker or 'none'}",
-            f"Tracked watchlist holdings: {', '.join(tracked_display) if tracked_display else 'none'}",
+            f"Indexed core watchlist holdings: {', '.join(tracked_display) if tracked_display else 'none'}",
         ]
         payload = {
             "model": self.settings.openrouter_jev_model,
@@ -203,10 +204,10 @@ class JevRouter:
                     "criteria": {
                         "log_note": "Save a short personal or interests reflection, podcast/book reaction, or general thought without blocking on an LLM.",
                         "log_task": "Save a short personal reminder, errand, gift, or to-do task without blocking on an LLM.",
-                        "earnings_preview": "Pre-earnings setup, preview, or checklist BEFORE a print for ANY company (held or not held), e.g. 'preview NVIDIA earnings', 'preview Alphabet earnings', 'what am I watching on TSMC?'.",
-                        "brief_holding": "Post-earnings thesis review or earnings summary for ANY company (held or not held), e.g. 'review NVIDIA earnings', 'review Apple earnings', 'what changed?'.",
-                        "follow_up_source": "Ask a specific factual follow-up question about one company's metric, driver, margin recovery, management comment, or outlook.",
-                        "peer_read_across": "Cross-company read-across comparing one company's filing/results against another holding's thesis (e.g. 'read-across from TSMC to NVIDIA', 'what does Microsoft capex mean for NVIDIA?').",
+                        "earnings_preview": "Pre-earnings setup, preview, or checklist BEFORE a print for ANY company (held or not held), e.g. 'preview Natera earnings', 'preview Insmed earnings', 'preview Alphabet earnings'.",
+                        "brief_holding": "Post-earnings thesis review or earnings summary for ANY company (held or not held), e.g. 'review Natera earnings', 'review Seagate earnings', 'what changed?'.",
+                        "follow_up_source": "Ask a specific factual follow-up question about one company's metric, driver, ASP, cash flow, margin, or management comment.",
+                        "peer_read_across": "Cross-company read-across comparing one company's filing/results against another holding's thesis (e.g. 'what does Amazon capex mean for Seagate?', 'read-across from Amazon to Seagate').",
                         "draft_next_check": "Explicitly dictate a watch item or question to check at the next earnings call or next quarter.",
                         "clarify": "The utterance is genuinely ambiguous and needs clarification.",
                     },
@@ -214,9 +215,9 @@ class JevRouter:
                 "holding": {
                     "type": "choice",
                     "instructions": (
-                        "Which target company is this utterance about? Pick a tracked ticker ONLY if the wearer "
-                        "explicitly named that tracked company. Pick 'untracked' if the wearer named a DIFFERENT "
-                        "company (e.g. Alphabet, Apple, Meta). Pick 'implicit_active' ONLY if no company was named."
+                        "Which target company is this utterance about? Pick an indexed ticker ONLY if the wearer "
+                        "explicitly named that indexed company. Pick 'untracked' if the wearer named a DIFFERENT "
+                        "company (e.g. Insmed, Fox, Sea Limited, Alphabet, Apple). Pick 'implicit_active' ONLY if no company was named."
                     ),
                     "criteria": ticker_criteria,
                 },
@@ -224,7 +225,7 @@ class JevRouter:
                     "type": "choice",
                     "instructions": (
                         "Only for cross-company peer read-across: which PEER/SOURCE ticker is being read from "
-                        "(e.g. in 'read-across from TSMC to NVIDIA', pick TSM)? Otherwise pick 'none'."
+                        "(e.g. in 'what does Amazon capex mean for Seagate?', pick AMZN)? Otherwise pick 'none'."
                     ),
                     "criteria": peer_criteria,
                 },
@@ -232,8 +233,8 @@ class JevRouter:
                     "type": "noul",
                     "instructions": (
                         "Does this request need the System-2 LLM worker on screen right now (true for thesis review, "
-                        "source follow-up, peer read-across, or preview/review of an untracked company; false for "
-                        "fast logs, dictated checks, and tracked-holding pre-earnings previews)?"
+                        "source follow-up, peer read-across, or preview/review of a non-indexed company; false for "
+                        "fast logs, dictated checks, and indexed-holding pre-earnings previews)?"
                     ),
                 },
                 "needs_enrichment": {
@@ -280,7 +281,6 @@ class JevRouter:
             untracked_extracted = self.extract_requested_company(transcript, available_tickers)
 
             if raw_holding.lower() == "untracked" or (untracked_extracted and not explicit_tracked):
-                # Never silently hijack an explicitly named non-watchlist company with active_ticker!
                 holding = None
                 requested_company = untracked_extracted or self._fallback_company_phrase(transcript)
             elif raw_holding.lower() in ("implicit_active", "none"):
@@ -312,7 +312,6 @@ class JevRouter:
             ActionType.PEER_READ_ACROSS,
         )
         if action == ActionType.EARNINGS_PREVIEW:
-            # Tracked holding preview is Tier-0 zero-LLM; untracked company preview uses web LLM worker.
             needs_worker = is_adhoc_company
         else:
             needs_worker = (
@@ -440,7 +439,7 @@ class JevRouter:
 
     @staticmethod
     def _detect_explicit_tickers(lower: str, available_tickers: list[str]) -> list[str]:
-        """Returns explicitly mentioned tracked tickers ordered by first appearance in the utterance."""
+        """Returns explicitly mentioned indexed watchlist tickers ordered by first appearance."""
         hits: list[tuple[int, str]] = []
         for ticker in available_tickers:
             names = TRACKED_ALIASES.get(ticker.upper(), (ticker.lower(),))
@@ -457,16 +456,25 @@ class JevRouter:
     @classmethod
     def extract_requested_company(cls, transcript: str, available_tickers: list[str]) -> str | None:
         """
-        Detects an explicitly named non-watchlist company (e.g. 'Alphabet', 'Apple', 'ASML')
-        so requests like 'Can you please preview Alphabet earnings?' NEVER default to NVDA.
+        Detects an explicitly named company outside the indexed 3-holding watchlist —
+        checking the full 61-position portfolio first, then common external companies,
+        then regex extraction — so requests like 'Preview Insmed earnings' or
+        'Preview Alphabet earnings' never fall back to an unrelated holding.
         """
+        excluded = {t.upper() for t in available_tickers}
+
+        # 1. Check all other holdings in the 61-position portfolio first
+        portfolio_hit = match_portfolio_position_in_text(transcript, exclude_tickers=excluded)
+        if portfolio_hit is not None:
+            return portfolio_hit.display_name
+
         lower = transcript.lower()
         tracked_names: set[str] = set()
         for t in available_tickers:
             tracked_names.add(t.lower())
             tracked_names.update(TRACKED_ALIASES.get(t.upper(), ()))
 
-        # 1. Known untracked public/private companies (ordered by earliest mention)
+        # 2. Known external public/private companies
         known_hits: list[tuple[int, str]] = []
         for alias, display in KNOWN_UNTRACKED_COMPANIES.items():
             if alias in tracked_names:
@@ -478,7 +486,7 @@ class JevRouter:
             known_hits.sort(key=lambda item: item[0])
             return known_hits[0][1]
 
-        # 2. Pattern extraction around 'preview/review <Company> earnings' or '<Company> earnings'
+        # 3. Pattern extraction around 'preview/review <Company> earnings' or '<Company> earnings'
         patterns = (
             r"\b(?:preview|review|brief|check)\s+(?:on\s+|for\s+)?([A-Za-z0-9&.\- ]{2,32}?)\s+(?:before\s+)?(?:earnings|results|quarter|print)\b",
             r"\b([A-Z][A-Za-z0-9&.\-]*(?:\s+[A-Z][A-Za-z0-9&.\-]*)?)\s+(?:earnings|results|quarter|print)\b",
@@ -559,7 +567,7 @@ class JevRouter:
             else (explicit_ticker or (active_ticker.upper() if active_ticker else None))
         )
 
-        # Peer read-across ("read-across from TSMC to NVIDIA", "what does Microsoft mean for NVIDIA")
+        # Peer read-across ("what does Amazon capex mean for Seagate?", "read-across from Amazon to Seagate")
         if any(kw in lower for kw in ("read-across", "read across", "peer read", "cross-read", "cross read", "mean for")):
             if len(explicit_tickers) >= 2:
                 peer_t, target_t = explicit_tickers[0], explicit_tickers[1]
@@ -579,7 +587,7 @@ class JevRouter:
                 reasoning=f"Work peer_read_across skill ({peer_t} -> {target_t}) routes to System-2 synthesis.",
             )
 
-        # Pre-earnings preview (Tier 0 zero-LLM for tracked holdings; web worker for non-watchlist companies)
+        # Pre-earnings preview (Tier 0 zero-LLM for indexed holdings; web worker for all other names)
         if any(kw in lower for kw in ("preview", "before earnings", "pre-call", "pre call", "what am i watching", "baseline")):
             is_untracked = untracked_company is not None
             return JevDecision(
@@ -597,7 +605,7 @@ class JevRouter:
                 ),
             )
 
-        # Next-quarter check dictation ("At the next call, check whether those price increases are on schedule")
+        # Next-quarter check dictation
         if any(kw in lower for kw in ("next call", "next quarter", "check whether", "track whether", "save check", "watch item")):
             return JevDecision(
                 mind=Mind.WORK,
@@ -610,8 +618,21 @@ class JevRouter:
                 reasoning="Work next-quarter check staged for 1-tap journal confirmation.",
             )
 
-        # Deep source follow-up ("What did management expect to bring margins back up?")
-        if any(kw in lower for kw in ("bring margins", "margins back", "price increase", "why did", "what did management", "how did", "follow up")):
+        # Deep source follow-up ("What drove Signatera ASP and cash flow?", "What did management say...")
+        if any(
+            kw in lower
+            for kw in (
+                "what drove",
+                "asp",
+                "cash flow",
+                "moldx",
+                "reimbursement",
+                "why did",
+                "what did management",
+                "how did",
+                "follow up",
+            )
+        ):
             return JevDecision(
                 mind=Mind.WORK,
                 action=ActionType.FOLLOW_UP_SOURCE,
@@ -623,7 +644,7 @@ class JevRouter:
                 reasoning="Work follow-up question requires source retrieval + worker.",
             )
 
-        # Earnings / holdings review ("Can we review NVIDIA earnings?", "Review Alphabet earnings", "What changed?")
+        # Earnings / holdings review
         if (
             any(kw in lower for kw in ("earning", "review", "what changed", "holding", "guidance", "margin", "revenue"))
             or explicit_ticker is not None
@@ -675,12 +696,19 @@ class JevRouter:
                 continue
 
             bonus = 0.0
-            if "revenue" in q_tokens and "revenue" in chunk.topic.lower():
+            topic_l = chunk.topic.lower()
+            if ("volume" in q_tokens or "oncology" in q_tokens or "guidance" in q_tokens) and "volume" in topic_l:
                 bonus += 4.0
-            if ("back" in q_tokens or "recover" in q_tokens or "price" in q_tokens) and "recovery" in chunk.topic.lower():
+            if ("asp" in q_tokens or "cash" in q_tokens or "moldx" in q_tokens or "reimbursement" in q_tokens) and "asp" in topic_l:
                 bonus += 4.0
-            if ("trough" in q_tokens or "deeper" in q_tokens) and "trough" in chunk.topic.lower():
+            if ("true" in q_tokens or "ups" in q_tokens or "underlying" in q_tokens or "cogs" in q_tokens) and "true-ups" in topic_l:
                 bonus += 4.0
+            if ("hamr" in q_tokens or "mozaic" in q_tokens or "azure" in q_tokens or "exabytes" in q_tokens) and "mozaic" in topic_l:
+                bonus += 4.0
+            if ("capex" in q_tokens or "storage" in q_tokens or "infrastructure" in q_tokens) and "capex" in topic_l:
+                bonus += 4.0
+            if ("aws" in q_tokens or "growth" in q_tokens or "operating" in q_tokens) and "operating" in topic_l:
+                bonus += 3.0
             score = overlap + bonus
             if score > best_score:
                 best_score = score

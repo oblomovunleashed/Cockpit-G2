@@ -175,7 +175,7 @@ class LLMWorker:
     ) -> tuple[str, DraftCheck]:
         """
         Cross-company synthesis skill: connects a verified peer filing passage
-        (e.g. TSMC CoWoS / Microsoft capex) to the target holding's saved thesis question.
+        (e.g. Amazon AWS capex / Seagate HAMR supply) to the target holding's saved thesis question.
         """
         fallback_finding, fallback_draft = build_grounded_peer_read_across(
             target=target,
@@ -221,6 +221,7 @@ class LLMWorker:
         company_query: str,
         mode: Literal["preview", "review", "followup"],
         utterance: str,
+        portfolio_weight_label: str | None = None,
         today_date: date | None = None,
     ) -> tuple[str, str, str, DraftCheck]:
         """
@@ -229,11 +230,17 @@ class LLMWorker:
         """
         today = today_date or datetime.now(timezone.utc).date()
         short_ticker = _derive_short_ticker(company_query)
+        holding_note = (
+            f"Held portfolio position ({portfolio_weight_label} weight)"
+            if portfolio_weight_label
+            else "External company (not in portfolio)"
+        )
 
         if not self.settings.live_openrouter_enabled:
             action_label = "preview" if mode == "preview" else "review"
+            wt_part = f" [{portfolio_weight_label} portfolio weight]" if portfolio_weight_label else ""
             finding = (
-                f"{company_query} earnings {action_label}: live OpenRouter web search is off (mock mode). "
+                f"{company_query}{wt_part} earnings {action_label}: live OpenRouter web search is off (mock mode). "
                 f"Enable live OpenRouter to fetch current {today.year} watchpoints."
             )
             source_label = "Offline mock"
@@ -273,6 +280,7 @@ class LLMWorker:
         )
         user_prompt = (
             f"Company requested: {company_query}\n"
+            f"Portfolio status: {holding_note}\n"
             f"Skill mode: {mode}\n"
             f"Wearer utterance: {utterance}"
         )

@@ -1,4 +1,4 @@
-.PHONY: setup setup-backend setup-glasses setup-notion smoke-live backend glasses sim test typecheck build pack
+.PHONY: setup setup-backend setup-glasses setup-notion sync-watchlist smoke-live backend glasses sim test typecheck build pack
 
 setup: setup-backend setup-glasses
 
@@ -12,6 +12,9 @@ setup-glasses:
 
 setup-notion:
 	PYTHONPATH=backend backend/.venv/bin/python -m app.scripts.setup_notion --write-env
+
+sync-watchlist:
+	PYTHONPATH=backend backend/.venv/bin/python -m app.scripts.setup_notion --sync-holdings
 
 smoke-live:
 	PYTHONPATH=backend backend/.venv/bin/python -m app.scripts.smoke_live

@@ -556,7 +556,7 @@ class JevRouter:
         resolved_ticker = (
             None
             if untracked_company
-            else (explicit_ticker or active_ticker or (available_tickers[0] if available_tickers else None))
+            else (explicit_ticker or (active_ticker.upper() if active_ticker else None))
         )
 
         # Peer read-across ("read-across from TSMC to NVIDIA", "what does Microsoft mean for NVIDIA")

@@ -9,6 +9,7 @@ import type {
 } from './types';
 
 export type ViewMode =
+  | 'HOME'
   | 'BRIEFING'
   | 'LISTENING'
   | 'PROCESSING'
@@ -16,8 +17,12 @@ export type ViewMode =
   | 'SAVED'
   | 'RESULT';
 
+export type RestMode = 'HOME' | 'BRIEFING';
+
 export interface CockpitState {
   mode: ViewMode;
+  returnMode: RestMode;
+  activeTicker: string | null;
   holdings: HoldingRecord[];
   holdingIndex: number;
   pendingWrite: PendingWrite | null;
@@ -31,7 +36,9 @@ export interface CockpitState {
 
 export function createInitialState(): CockpitState {
   return {
-    mode: 'BRIEFING',
+    mode: 'HOME',
+    returnMode: 'HOME',
+    activeTicker: null,
     holdings: [],
     holdingIndex: 0,
     pendingWrite: null,
@@ -44,12 +51,30 @@ export function createInitialState(): CockpitState {
   };
 }
 
+/**
+ * Returns the currently focused holding ONLY when the wearer is actively viewing
+ * the Work watchlist or has a tracked holding in focus — never leaks NVDA from HOME.
+ */
 export function activeHolding(state: CockpitState): HoldingRecord | null {
   if (state.holdings.length === 0) return null;
-  const idx =
-    ((state.holdingIndex % state.holdings.length) + state.holdings.length) %
-    state.holdings.length;
-  return state.holdings[idx] ?? null;
+  if (state.mode === 'HOME') return null;
+
+  if (state.mode === 'BRIEFING') {
+    const idx =
+      ((state.holdingIndex % state.holdings.length) + state.holdings.length) %
+      state.holdings.length;
+    return state.holdings[idx] ?? null;
+  }
+
+  if (state.activeTicker) {
+    return (
+      state.holdings.find(
+        (h) => h.ticker.toUpperCase() === state.activeTicker?.toUpperCase(),
+      ) ?? null
+    );
+  }
+
+  return null;
 }
 
 const MIND_CYCLE: ReadonlyArray<{ mind: Mind; kind: 'note' | 'task' | 'check' }> = [
@@ -69,27 +94,59 @@ export function nextMindTarget(
   return MIND_CYCLE[nextIdx]!;
 }
 
-export function holdingToCard(state: CockpitState): HudCard {
-  const holding = activeHolding(state);
-  if (!holding) {
-    return {
-      header: 'COCKPIT · READY',
-      body: 'No holdings loaded. Hold to log a note, task, or review earnings.',
-      footer: 'Hold: speak · Double-tap: exit',
-    };
+export function homeCard(state: CockpitState): HudCard {
+  const tickers = state.holdings.map((h) => h.ticker).join(', ');
+  const latest = state.recentJournal[0];
+  const lines = ['Hold to speak (Work, Personal, Interests).'];
+
+  if (latest) {
+    const tag = latest.ticker
+      ? `${latest.mind.toUpperCase()} ${latest.ticker}`
+      : latest.mind.toUpperCase();
+    const snippet = latest.enriched_summary?.trim() || latest.content;
+    lines.push(`Last [${tag}]: ${snippet}`);
+  } else if (tickers) {
+    lines.push(`Watchlist ready: ${tickers}`);
   }
-  const pos = state.holdingIndex + 1;
+
+  return {
+    header: 'COCKPIT · READY',
+    body: lines.join('\n'),
+    footer: 'Hold: speak · Swipe: watchlist · 2x: exit',
+  };
+}
+
+export function holdingToCard(state: CockpitState): HudCard {
+  if (state.holdings.length === 0) {
+    return homeCard(state);
+  }
+  const idx =
+    ((state.holdingIndex % state.holdings.length) + state.holdings.length) %
+    state.holdings.length;
+  const holding = state.holdings[idx];
+  if (!holding) {
+    return homeCard(state);
+  }
+  const pos = idx + 1;
   const total = state.holdings.length;
   const verdictPart = holding.verdict ? ` · ${holding.verdict}` : '';
   const sourceLine = holding.source_citation ? `\n[${holding.source_citation}]` : '';
   const nextLine = holding.next_check ? `\nNext: ${holding.next_check}` : '';
   const footer = holding.suggested_next_check
-    ? 'Hold: speak · Tap: review check · Swipe: next'
-    : 'Hold: ask or dictate check · Swipe: next';
+    ? 'Tap: review check · Swipe: next · 2x: home'
+    : 'Hold: speak · Swipe: next · 2x: home';
 
   return {
     header: `WORK · ${holding.ticker} ${pos}/${total}${verdictPart}`,
     body: `${holding.latest_finding}${sourceLine}${nextLine}`,
     footer,
   };
+}
+
+/** Returns the appropriate calm rest card (HOME by default, or BRIEFING only when browsing watchlist). */
+export function restCard(state: CockpitState): HudCard {
+  if (state.returnMode === 'BRIEFING' && state.holdings.length > 0) {
+    return holdingToCard(state);
+  }
+  return homeCard(state);
 }

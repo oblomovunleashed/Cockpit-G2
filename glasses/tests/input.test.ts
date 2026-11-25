@@ -21,12 +21,19 @@ import {
   type SwipeActionDeps,
   type TapActionDeps,
 } from '../src/input.ts';
-import type { CockpitState } from '../src/state.ts';
+import {
+  activeHolding,
+  createInitialState,
+  homeCard,
+  type CockpitState,
+} from '../src/state.ts';
 import type { ConfirmWriteResponse, HudCard, UtteranceResponse } from '../src/types.ts';
 
 function makeState(overrides: Partial<CockpitState> = {}): CockpitState {
   return {
     mode: 'BRIEFING',
+    returnMode: 'BRIEFING',
+    activeTicker: null,
     holdings: [],
     holdingIndex: 0,
     pendingWrite: null,
@@ -931,4 +938,119 @@ test('Pull Notion while CONFIRM card is open clears and cancels pending write be
   assert.deepEqual(cancelledIds, ['pending-stale-1', 'new-check-1']);
   assert.equal(state.pendingWrite, null);
   assert.equal(state.mode, 'BRIEFING');
+});
+
+test('Cockpit boots into calm HOME (not NVIDIA) and returns to HOME after Personal/Interests saves', async () => {
+  const nvda = {
+    ticker: 'NVDA',
+    company: 'NVIDIA Corp.',
+    saved_question: 'Does NVIDIA expect the margin trough to get deeper?',
+    verdict: 'HELD' as const,
+    latest_finding: 'Q4 FY27 gross margin guide 71-72%.',
+    source_citation: 'Q3 FY27 PR',
+    suggested_next_check: 'Check price hikes',
+    next_check: '',
+    notion_page_id: null,
+    updated_at: '2026-11-25T12:00:00Z',
+  };
+
+  // Fresh boot state starts in HOME with no leaked activeHolding
+  const state = createInitialState();
+  state.holdings = [nvda];
+  assert.equal(state.mode, 'HOME');
+  assert.equal(state.returnMode, 'HOME');
+  assert.equal(activeHolding(state), null);
+  assert.equal(homeCard(state).header, 'COCKPIT · READY');
+  assert.equal(homeCard(state).body.includes('margin trough'), false);
+
+  // Confirm an Interests note from HOME -> tap done returns to HOME (NOT NVDA!)
+  state.mode = 'CONFIRM_WRITE';
+  state.pendingWrite = {
+    id: 'note-home-1',
+    mind: 'interests',
+    kind: 'note',
+    content: 'I enjoyed the latest Acquired podcast',
+    ticker: null,
+    source_citation: null,
+    updates_next_check: false,
+  };
+
+  const rendered: HudCard[] = [];
+  const tapDeps: TapActionDeps = {
+    isRecording: () => false,
+    getActiveHolding: activeHolding,
+    confirmWrite: async () => ({
+      entry: {
+        id: 55,
+        mind: 'interests',
+        kind: 'note',
+        content: 'I enjoyed the latest Acquired podcast',
+        ticker: null,
+        source_citation: null,
+        notion_page_id: null,
+        created_at: '2026-11-25T12:30:00Z',
+      },
+      holding: null,
+      synced_to_notion: false,
+      hud: {
+        header: 'INTERESTS · SAVED',
+        body: 'OK: I enjoyed the latest Acquired podcast',
+        footer: 'Tap: done · Swipe: undo · Hold: speak',
+      },
+    }),
+    stageCheck: async () => {
+      throw new Error('unexpected');
+    },
+    stageSuggestedCheck: async () => {
+      throw new Error('unexpected');
+    },
+    refreshDeckAfterSave: async () => {
+      state.recentJournal = [
+        {
+          id: 55,
+          mind: 'interests',
+          kind: 'note',
+          content: 'I enjoyed the latest Acquired podcast',
+          ticker: null,
+          source_citation: null,
+          notion_page_id: null,
+          created_at: '2026-11-25T12:30:00Z',
+        },
+      ];
+    },
+    showCard: async (c) => {
+      rendered.push(c);
+    },
+  };
+
+  // Tap 1: confirm save
+  await executeTapAction(state, tapDeps);
+  assert.equal(state.mode, 'SAVED');
+  assert.equal(state.returnMode, 'HOME');
+
+  // Tap 2: dismiss SAVED -> lands back on calm HOME showing Last saved, NOT NVIDIA
+  await executeTapAction(state, tapDeps);
+  assert.equal(state.mode, 'HOME');
+  assert.equal(activeHolding(state), null);
+  assert.equal(rendered.at(-1)?.header, 'COCKPIT · READY');
+  assert.match(rendered.at(-1)?.body ?? '', /Acquired podcast/);
+
+  // Explicit Swipe from HOME opens the watchlist at NVDA 1/1
+  await executeSwipeAction(state, 1, {
+    isRecording: () => false,
+    getActiveHolding: activeHolding,
+    reclassifyPendingWrite: async () => {
+      throw new Error('unexpected');
+    },
+    undoJournalEntry: async () => {
+      throw new Error('unexpected');
+    },
+    refreshDeckAfterChange: async () => {},
+    showCard: async (c) => {
+      rendered.push(c);
+    },
+  });
+  assert.equal(state.mode, 'BRIEFING');
+  assert.equal(activeHolding(state)?.ticker, 'NVDA');
+  assert.match(rendered.at(-1)?.header ?? '', /WORK · NVDA/);
 });

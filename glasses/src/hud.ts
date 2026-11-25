@@ -10,7 +10,7 @@ import type { HudCard } from './types';
 
 export const MENU_ITEM_PULL_NOTION = 1;
 export const MENU_ITEM_NEXT_HOLDING = 2;
-export const MENU_ITEM_REFRESH = 3;
+export const MENU_ITEM_HOME = 3;
 
 const CONTAINER_HEADER_ID = 1;
 const CONTAINER_BODY_ID = 2;
@@ -90,9 +90,9 @@ export class G2HudRenderer {
 
     const menu = new MenuContainerProperty({
       menuItems: [
+        new MenuItemProperty({ itemID: MENU_ITEM_HOME, itemName: 'Cockpit Home' }),
         new MenuItemProperty({ itemID: MENU_ITEM_PULL_NOTION, itemName: 'Pull Notion questions' }),
-        new MenuItemProperty({ itemID: MENU_ITEM_NEXT_HOLDING, itemName: 'Next holding' }),
-        new MenuItemProperty({ itemID: MENU_ITEM_REFRESH, itemName: 'Refresh deck' }),
+        new MenuItemProperty({ itemID: MENU_ITEM_NEXT_HOLDING, itemName: 'Browse watchlist' }),
       ],
     });
 

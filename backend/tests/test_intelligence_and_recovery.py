@@ -363,3 +363,25 @@ def test_legacy_sqlite_schema_migrates_cleanly_for_enrichment_columns(tmp_path: 
     assert len(entries) == 1
     assert entries[0].content == "Legacy saved task"
     assert entries[0].enrichment_status == "none"
+
+
+def test_implicit_work_query_from_home_asks_which_company_instead_of_defaulting_to_nvda(
+    tmp_path: Path,
+) -> None:
+    """When active_ticker is None (wearer is on HOME) and no company is named, do not default to NVDA."""
+    with TestClient(create_app(_make_settings(tmp_path))) as client:
+        r_preview = client.post(
+            "/api/text",
+            json={"transcript": "Preview earnings", "active_ticker": None},
+        )
+        assert r_preview.status_code == 200
+        assert r_preview.json()["holding"] is None
+        assert r_preview.json()["hud"]["header"] == "WORK · WHICH COMPANY?"
+
+        r_review = client.post(
+            "/api/text",
+            json={"transcript": "What changed?", "active_ticker": None},
+        )
+        assert r_review.status_code == 200
+        assert r_review.json()["holding"] is None
+        assert r_review.json()["hud"]["header"] == "WORK · WHICH COMPANY?"

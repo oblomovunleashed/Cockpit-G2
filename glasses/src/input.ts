@@ -5,7 +5,14 @@ import {
   type EvenHubEvent,
 } from '@evenrealities/even_hub_sdk';
 import type { PcmAudioRecorder } from './audio.ts';
-import { holdingToCard, nextMindTarget, type CockpitState, type ViewMode } from './state.ts';
+import {
+  holdingToCard,
+  homeCard,
+  nextMindTarget,
+  restCard,
+  type CockpitState,
+  type ViewMode,
+} from './state.ts';
 import type {
   ConfirmWriteResponse,
   DraftCheck,
@@ -182,11 +189,18 @@ export function nextViewModeFromUtterance(res: UtteranceResponse): ViewMode {
 export async function executeTapAction(state: CockpitState, deps: TapActionDeps): Promise<void> {
   if (state.mode === 'PROCESSING' || deps.isRecording()) return;
 
-  // Post-confirm or post-undo receipt screen stays until wearer taps to dismiss back to deck
+  // Post-confirm or post-undo receipt screen stays until wearer taps to dismiss back to HOME or watchlist
   if (state.mode === 'SAVED') {
     state.lastSavedEntry = null;
-    state.mode = 'BRIEFING';
-    await deps.showCard(holdingToCard(state));
+    state.mode = state.returnMode;
+    if (state.mode === 'HOME') {
+      state.activeTicker = null;
+      await deps.showCard(homeCard(state));
+    } else {
+      const h = state.holdings[state.holdingIndex] ?? null;
+      state.activeTicker = h?.ticker ?? null;
+      await deps.showCard(holdingToCard(state));
+    }
     return;
   }
 
@@ -206,15 +220,27 @@ export async function executeTapAction(state: CockpitState, deps: TapActionDeps)
       const confirmed = await deps.confirmWrite(pending.id);
       state.mode = 'SAVED';
       state.lastSavedEntry = confirmed.entry;
+      if (confirmed.holding) {
+        const idx = state.holdings.findIndex((h) => h.ticker === confirmed.holding?.ticker);
+        if (idx >= 0) {
+          state.holdings[idx] = confirmed.holding;
+          state.holdingIndex = idx;
+        }
+        state.returnMode = 'BRIEFING';
+        state.activeTicker = confirmed.holding.ticker;
+      } else {
+        state.returnMode = 'HOME';
+        state.activeTicker = null;
+      }
       await deps.refreshDeckAfterSave();
       await deps.showCard(confirmed.hud);
       deps.onSaved?.(confirmed);
     } catch (err) {
-      state.mode = 'BRIEFING';
+      state.mode = state.returnMode;
       await deps.showCard({
         header: 'COCKPIT · SAVE ERROR',
         body: err instanceof Error ? err.message : 'Failed to save entry.',
-        footer: 'Swipe to return to deck',
+        footer: 'Swipe: watchlist · 2x: home',
       });
     }
     return;
@@ -335,9 +361,18 @@ export async function executeSwipeAction(
   state.suggestedCheck = null;
   state.lastSavedEntry = null;
   if (state.holdings.length > 0) {
-    state.holdingIndex =
-      (state.holdingIndex + delta + state.holdings.length) % state.holdings.length;
+    if (state.mode === 'HOME') {
+      // Entering watchlist from HOME starts at the current holding (NVDA 1/3) instead of skipping it
+      state.holdingIndex =
+        ((state.holdingIndex % state.holdings.length) + state.holdings.length) %
+        state.holdings.length;
+    } else {
+      state.holdingIndex =
+        (state.holdingIndex + delta + state.holdings.length) % state.holdings.length;
+    }
     state.mode = 'BRIEFING';
+    state.returnMode = 'BRIEFING';
+    state.activeTicker = state.holdings[state.holdingIndex]?.ticker ?? null;
     await deps.showCard(holdingToCard(state));
   }
 }
@@ -379,6 +414,8 @@ export async function executePullNotionAction(
     if (res.recomputed.length > 0) {
       const idx = state.holdings.findIndex((h) => h.ticker === res.recomputed[0]);
       if (idx >= 0) state.holdingIndex = idx;
+      state.returnMode = 'BRIEFING';
+      state.activeTicker = res.recomputed[0] ?? null;
       state.mode = 'SAVED';
       state.lastSavedEntry = null;
       await deps.showCard({
@@ -387,15 +424,18 @@ export async function executePullNotionAction(
         footer: 'Tap: view updated card · Swipe: next',
       });
     } else {
-      state.mode = 'BRIEFING';
-      await deps.showCard(holdingToCard(state));
+      state.mode = state.returnMode;
+      if (state.mode === 'HOME') {
+        state.activeTicker = null;
+      }
+      await deps.showCard(restCard(state));
     }
   } catch (err) {
-    state.mode = 'BRIEFING';
+    state.mode = state.returnMode;
     await deps.showCard({
       header: 'NOTION · SYNC ERROR',
       body: err instanceof Error ? err.message : 'Failed to pull Notion watchlist.',
-      footer: 'Swipe: deck',
+      footer: 'Swipe: watchlist · 2x: home',
     });
   }
 }
@@ -478,8 +518,11 @@ export async function stopBridgeCapture(
           state.mode = 'CONFIRM_WRITE';
           await deps.showCard(pendingToConfirmCard(state.pendingWrite));
         } else {
-          state.mode = 'BRIEFING';
-          await deps.showCard(holdingToCard(state));
+          state.mode = state.returnMode;
+          if (state.mode === 'HOME') {
+            state.activeTicker = null;
+          }
+          await deps.showCard(restCard(state));
         }
       }
       return;

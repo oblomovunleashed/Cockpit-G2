@@ -8,9 +8,9 @@ import { CockpitApiClient } from './api';
 import { BrowserMicRecorder, PcmAudioRecorder } from './audio';
 import {
   G2HudRenderer,
+  MENU_ITEM_HOME,
   MENU_ITEM_NEXT_HOLDING,
   MENU_ITEM_PULL_NOTION,
-  MENU_ITEM_REFRESH,
 } from './hud';
 import {
   dispatchEvenHubEvent,
@@ -22,8 +22,21 @@ import {
   stopBridgeCapture,
   type BridgeCaptureState,
 } from './input';
-import { activeHolding, createInitialState, holdingToCard, type CockpitState } from './state';
-import type { ConfirmWriteResponse, HudCard, JevDecision, JournalEntry, Mind } from './types';
+import {
+  activeHolding,
+  createInitialState,
+  homeCard,
+  restCard,
+  type CockpitState,
+} from './state';
+import type {
+  ConfirmWriteResponse,
+  HudCard,
+  JevDecision,
+  JournalEntry,
+  Mind,
+  UtteranceResponse,
+} from './types';
 
 const NVDA_MARGIN_Q = 'Does NVIDIA expect the margin trough to get deeper?';
 const NVDA_REVENUE_Q = "Is revenue running ahead of management's guidance?";
@@ -235,12 +248,51 @@ async function refreshDeck(renderCurrent = true): Promise<void> {
   }
   updateCompanionPanel(state.lastDecision);
   if (renderCurrent) {
-    state.mode = 'BRIEFING';
     state.pendingWrite = null;
     state.suggestedCheck = null;
     state.lastSavedEntry = null;
-    await hud.render(holdingToCard(state));
+    state.mode = state.returnMode;
+    if (state.mode === 'HOME') {
+      state.activeTicker = null;
+      await showCard(homeCard(state));
+    } else {
+      state.activeTicker = state.holdings[state.holdingIndex]?.ticker ?? null;
+      await showCard(restCard(state));
+    }
   }
+}
+
+async function goHome(): Promise<void> {
+  if (state.mode === 'PROCESSING' || isAnyMicRecording()) return;
+  stopEnrichmentPoll();
+  await discardPendingWriteIfAny();
+  state.returnMode = 'HOME';
+  state.activeTicker = null;
+  state.mode = 'HOME';
+  await showCard(homeCard(state));
+}
+
+function applyUtteranceResult(res: UtteranceResponse): void {
+  state.lastDecision = res.decision;
+  state.pendingWrite = res.pending_write;
+  state.suggestedCheck = res.suggested_check;
+  state.lastSavedEntry = null;
+
+  if (res.holding) {
+    const idx = state.holdings.findIndex((h) => h.ticker === res.holding?.ticker);
+    if (idx >= 0) {
+      state.holdings[idx] = res.holding;
+      state.holdingIndex = idx;
+    }
+    state.activeTicker = res.holding.ticker;
+    state.returnMode = 'BRIEFING';
+  } else {
+    state.activeTicker = null;
+    state.returnMode = 'HOME';
+  }
+
+  state.mode = nextViewModeFromUtterance(res);
+  updateCompanionPanel(res.decision);
 }
 
 async function showCard(card: HudCard): Promise<void> {
@@ -254,6 +306,7 @@ async function submitTextUtterance(transcript: string): Promise<void> {
   if (!clean) return;
 
   stopEnrichmentPoll();
+  const current = activeHolding(state);
   await discardPendingWriteIfAny();
   state.mode = 'PROCESSING';
   await showCard({
@@ -263,25 +316,11 @@ async function submitTextUtterance(transcript: string): Promise<void> {
   });
 
   try {
-    const current = activeHolding(state);
     const res = await api.sendText(clean, current?.ticker ?? null);
-    state.lastDecision = res.decision;
-    state.pendingWrite = res.pending_write;
-    state.suggestedCheck = res.suggested_check;
-
-    if (res.holding) {
-      const idx = state.holdings.findIndex((h) => h.ticker === res.holding?.ticker);
-      if (idx >= 0) {
-        state.holdings[idx] = res.holding;
-        state.holdingIndex = idx;
-      }
-    }
-
-    state.mode = nextViewModeFromUtterance(res);
-    updateCompanionPanel(res.decision);
+    applyUtteranceResult(res);
     await showCard(res.hud);
   } catch (err) {
-    state.mode = 'BRIEFING';
+    state.mode = state.returnMode;
     await showCard({
       header: 'COCKPIT · BACKEND ERROR',
       body: err instanceof Error ? err.message : 'Unable to reach local backend.',
@@ -355,11 +394,11 @@ async function handleUndoDirect(): Promise<void> {
     state.mode = 'SAVED';
     await showCard(undone.hud);
   } catch (err) {
-    state.mode = 'BRIEFING';
+    state.mode = state.returnMode;
     await showCard({
       header: 'COCKPIT · UNDO ERROR',
       body: err instanceof Error ? err.message : 'Could not undo entry.',
-      footer: 'Swipe: deck',
+      footer: 'Swipe: watchlist · 2x: home',
     });
   }
 }
@@ -368,21 +407,17 @@ async function handleDoubleTap(): Promise<void> {
   if (state.mode === 'PROCESSING') return;
 
   if (
-    state.mode !== 'BRIEFING' ||
+    state.mode !== 'HOME' ||
     state.pendingWrite ||
     state.suggestedCheck ||
     state.lastSavedEntry
   ) {
     stopEnrichmentPoll();
-    if (state.pendingWrite) {
-      const pendingId = state.pendingWrite.id;
-      state.pendingWrite = null;
-      await api.cancelWrite(pendingId);
-    }
-    state.suggestedCheck = null;
-    state.lastSavedEntry = null;
-    state.mode = 'BRIEFING';
-    await showCard(holdingToCard(state));
+    await discardPendingWriteIfAny();
+    state.returnMode = 'HOME';
+    state.activeTicker = null;
+    state.mode = 'HOME';
+    await showCard(homeCard(state));
     return;
   }
 
@@ -405,8 +440,8 @@ async function startVoiceCapture(): Promise<void> {
     onAudioReady: (wavBlob) => routeWavBlob(wavBlob, 'G2/Simulator'),
   });
   if (outcome === 'failed' && state.mode === 'LISTENING') {
-    state.mode = 'BRIEFING';
-    await showCard(holdingToCard(state));
+    state.mode = state.returnMode;
+    await showCard(restCard(state));
   }
 }
 
@@ -417,11 +452,12 @@ async function routeWavBlob(wavBlob: Blob | null, sourceLabel: string): Promise<
     await showCard({
       header: 'COCKPIT · NO AUDIO',
       body: `No ${sourceLabel} mic frames received. Hold the button for 1-2s while speaking and check macOS Microphone permission.`,
-      footer: 'Tap: deck · Hold: try again',
+      footer: 'Tap: done · Hold: try again',
     });
     return;
   }
 
+  const current = activeHolding(state);
   await discardPendingWriteIfAny();
   state.mode = 'PROCESSING';
   await showCard({
@@ -431,21 +467,8 @@ async function routeWavBlob(wavBlob: Blob | null, sourceLabel: string): Promise<
   });
 
   try {
-    const current = activeHolding(state);
     const res = await api.sendVoice(wavBlob, current?.ticker ?? null);
-    state.lastDecision = res.decision;
-    state.pendingWrite = res.pending_write;
-    state.suggestedCheck = res.suggested_check;
-    state.lastSavedEntry = null;
-    if (res.holding) {
-      const idx = state.holdings.findIndex((h) => h.ticker === res.holding?.ticker);
-      if (idx >= 0) {
-        state.holdings[idx] = res.holding;
-        state.holdingIndex = idx;
-      }
-    }
-    state.mode = nextViewModeFromUtterance(res);
-    updateCompanionPanel(res.decision);
+    applyUtteranceResult(res);
     await showCard(res.hud);
   } catch (err) {
     state.mode = 'SAVED';
@@ -453,7 +476,7 @@ async function routeWavBlob(wavBlob: Blob | null, sourceLabel: string): Promise<
     await showCard({
       header: 'COCKPIT · VOICE ERROR',
       body: err instanceof Error ? err.message : 'Voice transcription failed.',
-      footer: 'Tap: deck · Hold: try again',
+      footer: 'Tap: done · Hold: try again',
     });
   }
 }
@@ -533,8 +556,8 @@ async function stopUnifiedMicButtonAndRoute(): Promise<void> {
   if (!wavBlob) {
     if (wasPreStart) {
       if (wasListening) {
-        state.mode = 'BRIEFING';
-        await showCard(holdingToCard(state));
+        state.mode = state.returnMode;
+        await showCard(restCard(state));
       }
       return;
     }
@@ -553,8 +576,8 @@ function handleEvenHubEvent(event: EvenHubEvent): void {
         void handlePullNotion();
       } else if (itemId === MENU_ITEM_NEXT_HOLDING) {
         void handleSwipe(1);
-      } else if (itemId === MENU_ITEM_REFRESH) {
-        void discardPendingWriteIfAny().then(() => refreshDeck(true));
+      } else if (itemId === MENU_ITEM_HOME) {
+        void goHome();
       }
     },
     onLongPress: () => void startVoiceCapture(),
@@ -618,6 +641,10 @@ function wireCompanionControls(): void {
     void handleSwipe(1);
   });
 
+  document.getElementById('btn-home')?.addEventListener('click', () => {
+    void goHome();
+  });
+
   document.getElementById('btn-undo')?.addEventListener('click', () => {
     void handleUndoDirect();
   });
@@ -647,6 +674,8 @@ function wireCompanionControls(): void {
       state.holdings[idx] = updated.holding;
       state.holdingIndex = idx;
     }
+    state.returnMode = 'BRIEFING';
+    state.activeTicker = 'NVDA';
     state.mode = 'BRIEFING';
     await showCard(updated.hud);
   });

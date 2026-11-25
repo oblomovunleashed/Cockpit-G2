@@ -328,11 +328,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         # --------------------------------------------------------------
         if decision.action == ActionType.DRAFT_NEXT_CHECK:
             if decision.holding is None and decision.requested_company:
-                ticker = decision.requested_company.split("(")[-1].rstrip(")").upper()[:8]
+                ticker: str | None = decision.requested_company.split("(")[-1].rstrip(")").upper()[:8]
                 holding = None
             else:
-                ticker = (decision.holding or active_ticker or (tickers[0] if tickers else "NVDA")).upper()
-                holding = db.get_holding(ticker)
+                raw_ticker = decision.holding or active_ticker
+                ticker = raw_ticker.upper() if raw_ticker else None
+                holding = db.get_holding(ticker) if ticker else None
             pending = PendingWrite(
                 id=uuid.uuid4().hex[:12],
                 mind=Mind.WORK,
@@ -368,7 +369,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 hud = HudCard(
                     header=_clip(f"PREVIEW · {resolved_ticker} · WEB", 60),
                     body=_clip(f"{finding}\n[Web: {source_label}]", 240),
-                    footer="Tap: save watchpoint · Swipe: deck",
+                    footer="Tap: save watchpoint · Swipe: watchlist",
                 )
                 return UtteranceResponse(
                     transcript=transcript,
@@ -379,7 +380,23 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     suggested_check=draft,
                 )
 
-            ticker = (decision.holding or active_ticker or (tickers[0] if tickers else "NVDA")).upper()
+            raw_ticker = decision.holding or active_ticker
+            if not raw_ticker:
+                hud = HudCard(
+                    header="WORK · WHICH COMPANY?",
+                    body="Name any company to preview (e.g. NVIDIA, Alphabet, TSMC) or swipe into your watchlist.",
+                    footer="Hold: ask with company · Swipe: watchlist",
+                )
+                return UtteranceResponse(
+                    transcript=transcript,
+                    decision=decision,
+                    hud=hud,
+                    holding=None,
+                    pending_write=None,
+                    suggested_check=None,
+                )
+
+            ticker = raw_ticker.upper()
             holding = await refresh_holding_from_notion(ticker) or db.get_holding(ticker)
             if holding is None:
                 raise HTTPException(status_code=404, detail=f"Holding not found: {ticker}")
@@ -541,7 +558,23 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         # --------------------------------------------------------------
         # DEEP PATH ("LLM WORKER") — TRACKED WORK EARNINGS BRIEF OR FOLLOW-UP
         # --------------------------------------------------------------
-        ticker = (decision.holding or active_ticker or (tickers[0] if tickers else "NVDA")).upper()
+        raw_ticker = decision.holding or active_ticker
+        if not raw_ticker:
+            hud = HudCard(
+                header="WORK · WHICH COMPANY?",
+                body="Name any company (e.g. NVIDIA, Alphabet, TSMC) or swipe into your watchlist.",
+                footer="Hold: ask with company · Swipe: watchlist",
+            )
+            return UtteranceResponse(
+                transcript=transcript,
+                decision=decision,
+                hud=hud,
+                holding=None,
+                pending_write=None,
+                suggested_check=None,
+            )
+
+        ticker = raw_ticker.upper()
         holding = db.get_holding(ticker)
         if holding is None:
             raise HTTPException(status_code=404, detail=f"Holding not found: {ticker}")

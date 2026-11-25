@@ -14,6 +14,10 @@
         "http://localhost:8000",
         "http://127.0.0.1:8000"
       ]
+    },
+    {
+      "name": "g2-microphone",
+      "desc": "Captures push-to-talk 16 kHz PCM voice commands from the Even G2 microphone."
     }
   ],
   "supported_languages": [

@@ -85,6 +85,26 @@ def resolve_relative_date(text: str, today: date) -> str | None:
     return None
 
 
+def _normalize_url(url: str) -> str:
+    return url.strip().rstrip("/")
+
+
+def _pick_provider_cited_url(candidate: str, citation_urls: list[str]) -> str:
+    """
+    Only publishes URLs backed by OpenRouter's provider `annotations` (`url_citation`).
+    Never trusts an unverified model-invented link.
+    """
+    provider_urls = [u.strip() for u in citation_urls if u.strip().startswith(("http://", "https://"))]
+    if not provider_urls:
+        return ""
+    norm_candidate = _normalize_url(candidate)
+    if norm_candidate:
+        for cited in provider_urls:
+            if _normalize_url(cited) == norm_candidate:
+                return cited
+    return provider_urls[0]
+
+
 def _derive_short_ticker(company_query: str) -> str:
     m = _TICKER_IN_PARENS_RE.search(company_query)
     if m:
@@ -367,9 +387,8 @@ class LLMWorker:
         resolved = bool(parsed.get("resolved", False))
         needs_detail = bool(parsed.get("needs_detail", False))
         summary = strip_markdown(str(parsed.get("enriched_summary", "")))
-        raw_url = str(parsed.get("url", "") or "").strip()
-        if not raw_url.startswith(("http://", "https://")):
-            raw_url = citation_urls[0] if (resolved and citation_urls) else ""
+        model_url = str(parsed.get("url", "") or "").strip()
+        verified_url = _pick_provider_cited_url(model_url, citation_urls) if resolved else ""
 
         raw_due = parsed.get("due_date")
         due_date = local_due
@@ -390,7 +409,7 @@ class LLMWorker:
         return EnrichmentResult(
             status="enriched",
             enriched_summary=(summary or "Enriched context saved.")[:220],
-            enriched_url=raw_url[:500],
+            enriched_url=verified_url[:500],
             due_date=due_date,
         )
 

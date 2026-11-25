@@ -26,8 +26,8 @@ Cockpit boots and rests on **`HOME` (`COCKPIT | READY`)** — never forcing a Wo
 | :--- | :--- | :--- | :--- | :--- |
 | **`HOME`** (default) | Capture voice (16 kHz PCM → `/api/voice`) | No-op (calm) | Opens `BRIEFING` watchlist (`NVDA 1/3`) | Exits app (`shutDownPageContainer(1)`) |
 | **`BRIEFING`** (Work watchlist) | Capture voice (passes active ticker context) | Previews holding's `suggested_next_check` on `CONFIRM` card | Cycles `NVDA ↔ MSFT ↔ TSM` | Returns to calm `HOME` |
-| **`CONFIRM_WRITE`** | Capture voice | Atomically commits to SQLite + Notion → `SAVED` | **Reclassifies in place** (`Interests Note ↔ Personal Task ↔ Work Check`) via `PATCH /api/pending/{id}` | Cancels pending write → returns to `HOME` |
-| **`SAVED`** (receipt / enriched / undone / Notion updated) | Capture voice | Dismisses back to `returnMode` (`HOME` for Personal/Interests/ad-hoc; `BRIEFING` for tracked holding check or `NOTION \| UPDATED`) | **Undo** (`POST /api/journal/{id}/undo` — deletes SQLite row, restores prior `Next Check`, archives Notion page) | Returns to calm `HOME` |
+| **`CONFIRM_WRITE`** | Capture voice | Commits to SQLite, then syncs Notion → `SAVED` | **Reclassifies in place** (`Interests Note ↔ Personal Task ↔ Work Check`) via `PATCH /api/pending/{id}` | Cancels pending write → returns to `HOME` |
+| **`SAVED`** (receipt / enriched / undone / Notion updated) | Capture voice | Dismisses back to `returnMode` (`HOME` for Personal/Interests/ad-hoc; `BRIEFING` for tracked holding check or `NOTION \| UPDATED`) | **Undo** (`POST /api/journal/{id}/undo` — deletes local SQLite row, restores local `Next Check`, attempts Notion archive/PATCH) | Returns to calm `HOME` |
 | **`RESULT`** (follow-up / preview / peer read / ad-hoc web / `NO MATCH`) | Capture voice | If `suggestedCheck` present, previews wording on `CONFIRM` card (2-tap safety); otherwise stays in `RESULT` (never falls through to old holding check) | Opens/cycles `BRIEFING` watchlist | Returns to calm `HOME` |
 
 ---
@@ -37,7 +37,7 @@ Cockpit boots and rests on **`HOME` (`COCKPIT | READY`)** — never forcing a Wo
 ### Stage 1 — Audio Capture & Transcription (`glasses/src/audio.ts` + `services/openrouter_stt.py`)
 - **Inside Even Hub Simulator / G2 glasses:** Uses native `bridge.audioControl(true, AudioInputSource.Glasses)` (CoreAudio on macOS simulator, temple mic on G2) streaming 16 kHz 16-bit LE mono PCM chunks into a 44-byte RIFF/WAV buffer (30s safety cap, pending-release cancellation across both `showCard()` and `audioControl()` awaits).
 - **Standalone browser preview:** Falls back to `BrowserMicRecorder` (`getUserMedia` + `AudioContext.resume()` + downsampling to 16 kHz PCM WAV).
-- `POST /api/voice` base64-encodes WAV bytes and calls OpenRouter `POST /api/v1/audio/transcriptions` (`openai/whisper-large-v3-turbo`).
+- `POST /api/voice` base64-encodes WAV bytes and calls OpenRouter `POST /api/v1/audio/transcriptions` (`openai/whisper-large-v3-turbo`). In offline mock mode, `/api/voice` returns the deterministic fallback phrase `"Can we review NVIDIA earnings?"` unless `fallback_transcript` is supplied.
 
 ### Stage 2 — System-1 Triage (`services/jev_router.py`)
 - Single `~220 ms` call to `POST https://openrouter.ai/api/alpha/decisions` (`model: "~typesafe/jev-latest"`):
@@ -47,7 +47,7 @@ Cockpit boots and rests on **`HOME` (`COCKPIT | READY`)** — never forcing a Wo
   - `peer_holding` (`choice`): tracked peer tickers | `none`
   - `needs_llm_worker` (`noul` → `probability`): gates System-2 on-lens synthesis
   - `needs_enrichment` (`noul` → `probability`): gates async post-confirm background enrichment
-- **Tier 0 (Zero LLM, `< 5 ms`):** Tracked-holding `earnings_preview` renders saved question, verified prior-quarter guidance baseline, and open `Next Check` directly from SQLite + Notion.
+- **Tier 0 (Zero LLM, `< 5 ms` local compute):** Tracked-holding `earnings_preview` renders saved question, verified prior-quarter guidance baseline, and open `Next Check` directly from SQLite (with an optional live Notion pull beforehand when Notion is enabled).
 - **Fast Path (`log_note` / `log_task` / `draft_next_check`):** Zero blocking LLM on glasses; stages a `PendingWrite` immediately.
 
 ### Stage 3 — System-2 Work Skills (`services/retrieval.py` + `services/jev_router.py` + `services/llm_worker.py`)
@@ -55,13 +55,19 @@ Cockpit boots and rests on **`HOME` (`COCKPIT | READY`)** — never forcing a Wo
 2. **Peer read-across (`TSM → NVDA`, `MSFT → NVDA`):** Connects verified peer filing passage to target holding's saved thesis question and proposes a stageable check.
 3. **Any-company web preview & review (held or not held):** When Jev routes `holding = untracked` (e.g. Alphabet/GOOGL, Apple/AAPL), `synthesize_adhoc_earnings()` runs a date-aware OpenRouter web-grounded call (`plugins: [{"id": "web", "max_results": 3}]`), strips markdown links for LVGL clarity, and returns a `PREVIEW | <TICKER> | WEB` or `WORK | <TICKER> | WEB` card with a stageable watchpoint.
 
-### Stage 4 — Confirmed Writes, Undo & Async Background Enrichment (`db.py` + `notion_sync.py` + `job_runner.py`)
-- `POST /api/confirm` consumes `pending_writes` inside a single SQLite `BEGIN IMMEDIATE` transaction (preventing duplicate concurrent confirms and recording `previous_next_check` for rollback), pushes to Notion, and — if `needs_enrichment` is true — enqueues the entry onto `AsyncJobQueue[int]` *after* `notion_page_id` is saved.
+### Stage 4 — Confirmed Writes, Partial Failure Semantics, Undo & Async Enrichment (`db.py` + `notion_sync.py` + `job_runner.py`)
+- **Commit ordering & partial failures:** `POST /api/confirm` consumes `pending_writes` and persists to SQLite inside a single `BEGIN IMMEDIATE` transaction (preventing duplicate concurrent confirms and capturing `previous_next_check` for rollback). Notion journal creation (`POST /v1/pages`) and watchlist `Next Check` sync (`PATCH /v1/pages/{id}`) run afterward as separate HTTP calls:
+  - If Notion fails or is offline, the local SQLite entry is preserved and the HUD explicitly reports `Saved to Journal.` (local-only) rather than `Saved to Notion + Journal.`.
+  - On **Undo (`POST /api/journal/{id}/undo`)**, SQLite deletes the journal row and restores local `previous_next_check` first, then attempts `archive_page()` (`{"archived": true}`) and watchlist PATCH in Notion. If Notion is unreachable during Undo, the HUD reports `Removed from Journal.` (without claiming Notion archival), and a previously synced remote Notion row or `Next Check` may remain until removed manually or overwritten on the next sync.
 - **Background enrichment worker (`LLMWorker.enrich_journal_entry`):**
-  - Resolves relative dates (`tomorrow`, `next Friday`, `in 3 days`) deterministically via calendar math.
-  - Uses date-aware OpenRouter web lookup to resolve named podcasts/books/articles (e.g. latest *Acquired* episode + URL) and patches SQLite + Notion in place.
-  - Enforces strict anti-hallucination: unnamed entities (e.g. *"the latest podcast"* with no show name) are never invented and are marked `Needs Detail`.
-- **Undo (`POST /api/journal/{id}/undo`):** Atomically removes the SQLite row, restores `previous_next_check` on the holding if applicable, and archives the Notion page (`{"archived": true}`).
+  - Enqueued onto `AsyncJobQueue[int]` *after* `notion_page_id` is saved so Notion PATCH updates target the right page.
+  - Resolves relative dates (`tomorrow`, `next Friday`, `in 3 days`) deterministically via local calendar math (zero external request for pure Personal date tasks).
+  - **Live web data flow & URL citation guard:** For non-calendar notes flagged by Jev (`needs_enrichment = true`), the worker sends the **full confirmed note text** + today's date to OpenRouter's web-enabled model (`deepseek/deepseek-v4.1-flash-1017` with `plugins: [{"id": "web", "max_results": 3}]`). Clickable `Link` URLs are accepted **only** if they match a URL returned in OpenRouter's provider `annotations` (`url_citation`); unverified model-invented URLs are dropped.
+  - Unnamed entities (e.g. *"the latest podcast"* with no show name) are never fabricated and are marked `Needs Detail`.
+
+### Deployment Boundary (Desktop Simulator vs. Physical Phone)
+- The current FastAPI backend listens on loopback (`127.0.0.1:8000`) without authentication, intended strictly for local desktop + Even Hub Simulator usage.
+- `glasses/app.json` declares both `network` (loopback whitelist) and `g2-microphone` permissions. Shipping an `.ehpk` to a physical phone WebView requires changing `glasses/src/api.ts` and `glasses/app.json` to target a reachable **HTTPS backend protected by authentication** (so journal reads, writes, and undo routes are not exposed unauthenticated over a network).
 
 ---
 
@@ -81,7 +87,7 @@ Provisioned automatically via `make setup-notion` (`backend/app/scripts/setup_no
 | `Enrichment` | Select (`None`, `Pending`, `Enriched`, `Needs Detail`, `Failed`) | `Enriched` |
 | `Enriched` | Rich text *(patched asynchronously)* | `Latest Acquired episode (Oct 18, 2026) is 'Seinfeld'...` |
 | `Due Date` | Date *(optional, resolved from relative dates)* | `2026-12-04` |
-| `Link` | URL *(optional, verified citation URL)* | `https://www.acquired.fm/episodes/seinfeld` |
+| `Link` | URL *(optional, constrained to OpenRouter provider `url_citation` annotations)* | `https://www.acquired.fm/episodes/seinfeld` |
 
 ### Database B: `Holdings Watchlist` (`NOTION_HOLDINGS_DATABASE_ID`)
 | Property | Type | Sync Semantics |
@@ -92,4 +98,4 @@ Provisioned automatically via `make setup-notion` (`backend/app/scripts/setup_no
 | `Status` | Select (`HELD`, `AHEAD`, `WATCH`, `PENDING`) | Computed by Jev + Work worker |
 | `Latest Finding` | Rich text | Computed concise delta card |
 | `Source` | Rich text | Primary filing citation |
-| `Next Check` | Rich text | Updated only on confirmed Work checks; restored on Undo; clearing in Notion clears local cache |
+| `Next Check` | Rich text | Updated only on confirmed Work checks; local value restored on Undo (remote PATCH best-effort); clearing in Notion clears local cache |

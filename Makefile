@@ -8,7 +8,7 @@ setup-backend:
 	backend/.venv/bin/pip install -e "backend[dev]"
 
 setup-glasses:
-	cd glasses && npm install
+	cd glasses && npm ci
 
 setup-notion:
 	PYTHONPATH=backend backend/.venv/bin/python -m app.scripts.setup_notion --write-env

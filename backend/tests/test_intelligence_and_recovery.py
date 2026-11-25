@@ -11,9 +11,9 @@ from fastapi.testclient import TestClient
 from app.config import Settings
 from app.db import CockpitDB
 from app.main import create_app
-from app.models import ActionType, Mind
+from app.models import ActionType, JournalEntry, Mind
 from app.services.jev_router import JevRouter
-from app.services.llm_worker import resolve_relative_date, strip_markdown
+from app.services.llm_worker import LLMWorker, resolve_relative_date, strip_markdown
 
 
 def _make_settings(tmp_path: Path, *, with_notion: bool = False) -> Settings:
@@ -385,3 +385,73 @@ def test_implicit_work_query_from_home_asks_which_company_instead_of_defaulting_
         assert r_review.status_code == 200
         assert r_review.json()["holding"] is None
         assert r_review.json()["hud"]["header"] == "WORK · WHICH COMPANY?"
+
+
+def test_documented_abstention_phrase_works_from_home_in_mock_mode(tmp_path: Path) -> None:
+    """The documented mock-mode abstention example must route to NVDA follow-up and return NO MATCH."""
+    with TestClient(create_app(_make_settings(tmp_path))) as client:
+        resp = client.post(
+            "/api/text",
+            json={
+                "transcript": "What did management say about NVIDIA warranty reserves?",
+                "active_ticker": None,
+            },
+        )
+        assert resp.status_code == 200
+        payload = resp.json()
+        assert payload["decision"]["mind"] == "work"
+        assert payload["decision"]["action"] == "follow_up_source"
+        assert payload["decision"]["holding"] == "NVDA"
+        assert payload["hud"]["header"] == "WORK · NVDA · NO MATCH"
+        assert "No matching passage" in payload["hud"]["body"]
+        assert payload["pending_write"] is None
+        assert payload["suggested_check"] is None
+
+
+@pytest.mark.asyncio
+async def test_enrichment_rejects_unverified_model_url_not_in_provider_annotations() -> None:
+    """Live enrichment must only publish URLs backed by OpenRouter url_citation annotations."""
+    worker = LLMWorker(Settings(cockpit_mock_mode=False, openrouter_api_key="sk-or-test"))
+    entry = JournalEntry(
+        id=101,
+        mind=Mind.INTERESTS,
+        kind="note",
+        content="I enjoyed the latest Acquired podcast",
+        created_at="2026-11-25T10:00:00Z",
+    )
+
+    # Case 1: Model invents a URL not in annotations -> replaced by provider annotation URL
+    async def fake_with_provider_citation(*_args, **_kwargs):
+        return (
+            {
+                "resolved": True,
+                "needs_detail": False,
+                "enriched_summary": "Latest Acquired episode is Seinfeld.",
+                "url": "https://evil-or-invented.example/phish",
+                "due_date": None,
+            },
+            ["https://www.acquired.fm/episodes/seinfeld"],
+        )
+
+    worker._call_json_llm = fake_with_provider_citation  # type: ignore[method-assign]
+    res1 = await worker.enrich_journal_entry(entry)
+    assert res1.status == "enriched"
+    assert res1.enriched_url == "https://www.acquired.fm/episodes/seinfeld"
+
+    # Case 2: No provider annotations returned -> model URL is dropped (empty string)
+    async def fake_without_annotations(*_args, **_kwargs):
+        return (
+            {
+                "resolved": True,
+                "needs_detail": False,
+                "enriched_summary": "Latest Acquired episode is Seinfeld.",
+                "url": "https://unverified.example/made-up",
+                "due_date": None,
+            },
+            [],
+        )
+
+    worker._call_json_llm = fake_without_annotations  # type: ignore[method-assign]
+    res2 = await worker.enrich_journal_entry(entry)
+    assert res2.status == "enriched"
+    assert res2.enriched_url == ""

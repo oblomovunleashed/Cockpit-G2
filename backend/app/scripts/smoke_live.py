@@ -79,10 +79,12 @@ async def run_smoke(*, test_notion_write: bool) -> None:
     db = CockpitDB(settings.cockpit_db_path)
     seed_if_empty(db)
     tickers = [h.ticker for h in db.list_holdings()]
+    checks_ran = 0
 
     if not settings.openrouter_api_key.strip():
         print("[SKIP] OpenRouter checks skipped — set OPENROUTER_API_KEY and COCKPIT_MOCK_MODE=false in .env.")
     else:
+        checks_ran += 1
         live_settings = settings.model_copy(update={"cockpit_mock_mode": False})
         jev = JevRouter(live_settings)
         retriever = DocumentRetriever(db)
@@ -181,6 +183,7 @@ async def run_smoke(*, test_notion_write: bool) -> None:
     if not notion.holdings_enabled and not notion.enabled:
         print("[SKIP] Notion not configured yet — set NOTION_TOKEN + NOTION_PARENT_PAGE_ID and run `make setup-notion`.")
     else:
+        checks_ran += 1
         snapshots = await notion.pull_holdings()
         print(f"   ✓ Pulled {len(snapshots)} holding(s) from Notion Holdings Watchlist:")
         for ticker, snap in snapshots.items():
@@ -198,6 +201,14 @@ async def run_smoke(*, test_notion_write: bool) -> None:
             )
             page_id = await notion.push_journal_entry(dummy)
             print(f"   ✓ Test write to Cockpit Log -> page_id={page_id}")
+        elif notion.enabled:
+            print("   (Notion write check skipped by default; pass `--write` to append a test row to Cockpit Log.)")
+
+    if checks_ran == 0:
+        raise SystemExit(
+            "No live providers configured (both OpenRouter and Notion checks were skipped). "
+            "Set OPENROUTER_API_KEY and/or NOTION_TOKEN in .env first."
+        )
 
 
 def main() -> None:

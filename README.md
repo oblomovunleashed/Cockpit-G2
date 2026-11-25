@@ -136,6 +136,6 @@ Produces `glasses/cockpit.ehpk` (`min_app_version 2.2.10`, stamped against SDK `
 ## Safety, Provenance & Hackathon Disclosures
 
 - **Read-only financial data:** Cockpit never holds funds, places trades, connects to brokerage execution, or offers investment advice. All financial documents and web lookups are strictly read-only; confirmed writes go exclusively to the user's personal Notion/SQLite journal.
-- **Pre-event preparation & build-window provenance:** Concept notes, the three-mind framing, and the NVIDIA margin-vs.-revenue earnings comparison design were prepared on **Nov 18–19, 2026**. All code, automated tests, brand assets, Even Hub packaging, and live OpenRouter/Notion integrations in this repository were implemented during the **Nov 23–29, 2026** hackathon build window.
+- **Build window:** All code, automated tests, brand assets, Even Hub packaging, and live OpenRouter/Notion integrations in this repository were built during the **Nov 23–29, 2026** hackathon build window.
 - **AI-assisted development disclosure:** Built solo with AI-assisted coding tools (disclosed per hackathon organizer guidelines).
 - **API feature requests (5):** Documented in [docs/demo-script.md](docs/demo-script.md).

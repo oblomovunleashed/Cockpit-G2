@@ -172,10 +172,11 @@ class JevRouter:
                 "holding": {
                     "type": "choice",
                     "instructions": (
-                        "Which PRIMARY target company is this utterance about? Pick an indexed ticker ONLY if "
-                        "the wearer explicitly asked about that indexed company as the target. Pick 'untracked' "
-                        "if the primary target is any other company (even if an indexed company is mentioned incidentally). "
-                        "Pick 'implicit_active' ONLY if no company was named."
+                        "Which PRIMARY target company is this utterance about? Pick an indexed ticker if "
+                        "the wearer named that indexed company or one of its flagship products/segments "
+                        "(e.g. Signatera -> NTRA, Mozaic/HAMR -> STX, AWS -> AMZN). Pick 'untracked' ONLY "
+                        "if the primary target is a different company outside the indexed watchlist. "
+                        "Pick 'implicit_active' if no company was named."
                     ),
                     "criteria": ticker_criteria,
                 },
@@ -264,7 +265,9 @@ class JevRouter:
             ActionType.BRIEF_HOLDING,
             ActionType.FOLLOW_UP_SOURCE,
         )
-        if action == ActionType.EARNINGS_PREVIEW:
+        if action in no_llm_actions:
+            needs_worker = False
+        elif action == ActionType.EARNINGS_PREVIEW:
             needs_worker = is_adhoc_company
         elif action == ActionType.PEER_READ_ACROSS:
             needs_worker = holding is not None and peer_holding is not None
@@ -272,7 +275,7 @@ class JevRouter:
             needs_worker = (
                 is_adhoc_company
                 or action in llm_actions
-                or (mind == Mind.WORK and worker_prob >= 0.55 and action not in no_llm_actions)
+                or (mind == Mind.WORK and worker_prob >= 0.55)
             )
 
         is_fast_log = action in (ActionType.LOG_NOTE, ActionType.LOG_TASK)

@@ -106,7 +106,7 @@ cp .env.example .env
 
 ### 3. Run the Test Suite & Build
 ```bash
-make test       # 36 Python pytest tests + 14 TypeScript Node tests
+make test       # 37 Python pytest tests + 14 TypeScript Node tests
 make build      # tsc --noEmit && vite build
 ```
 

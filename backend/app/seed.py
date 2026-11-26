@@ -98,7 +98,8 @@ SEED_CHUNKS: list[dict[str, str]] = [
         "suggested_next_check": "Check whether Signatera clinical MRD test volumes maintain >50% YoY growth in Q4",
         "excerpt": (
             "Natera generated Q3 2026 total revenue of $794.0 million (+34.1% YoY vs $592.2 million), "
-            "processing ~1,093,100 total tests (+22.3% YoY) including ~339,500 oncology tests (+60.9% YoY). "
+            "processing ~1,093,100 total tests (+22.3% YoY) including ~339,500 oncology tests (+60.9% YoY), "
+            "led by Signatera clinical MRD volume (~316,000 clinical MRD units including Signatera and Latitude MRD, +56% YoY). "
             "Management raised full-year 2026 revenue guidance by $140 million at the midpoint from "
             "$2.850-$2.910 billion to $3.005-$3.035 billion."
         ),

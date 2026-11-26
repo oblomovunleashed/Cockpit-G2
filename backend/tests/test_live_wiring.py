@@ -276,3 +276,36 @@ async def test_smoke_live_exits_nonzero_on_notion_failures_and_passes_on_valid_c
     assert "✓ Pulled 1 holding(s)" in out
     assert "✓ Test write to Cockpit Log -> page_id=page-write-ok" in out
     assert "Smoke check passed (2 check(s) succeeded, 0 failures)" in out
+
+
+@pytest.mark.asyncio
+async def test_live_jev_draft_next_check_never_enables_llm_worker(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Dictating a next-quarter check must stay zero-LLM even when Jev picks `untracked`."""
+    router = JevRouter(Settings(cockpit_mock_mode=False, openrouter_api_key="sk-or-test"))
+
+    async def fake_jev(_payload: dict):
+        return (
+            {
+                "model": "typesafe/jev-1.14",
+                "answers": {
+                    "mind": {"type": "choice", "choice": "work", "confidence": 0.98},
+                    "action": {"type": "choice", "choice": "draft_next_check", "confidence": 0.97},
+                    "holding": {"type": "choice", "choice": "untracked", "confidence": 0.8},
+                    "peer_holding": {"type": "choice", "choice": "none", "confidence": 0.99},
+                    "needs_llm_worker": {"type": "noul", "probability": 0.72},
+                    "needs_enrichment": {"type": "noul", "probability": 0.05},
+                },
+            },
+            200,
+        )
+
+    monkeypatch.setattr(router, "_call_jev", fake_jev)
+    dec = await router.route_utterance(
+        "At the next call, check whether Insmed launch ramps cleanly.",
+        available_tickers=["NTRA", "STX", "AMZN"],
+        active_ticker="NTRA",
+    )
+    assert dec.action == ActionType.DRAFT_NEXT_CHECK
+    assert dec.needs_llm_worker is False

@@ -1,4 +1,4 @@
-.PHONY: setup setup-backend setup-glasses setup-notion smoke-live backend glasses sim test typecheck build pack
+.PHONY: setup setup-backend setup-glasses setup-notion sync-watchlist smoke-live backend glasses sim test typecheck build pack
 
 setup: setup-backend setup-glasses
 
@@ -8,10 +8,13 @@ setup-backend:
 	backend/.venv/bin/pip install -e "backend[dev]"
 
 setup-glasses:
-	cd glasses && npm install
+	cd glasses && npm ci
 
 setup-notion:
 	PYTHONPATH=backend backend/.venv/bin/python -m app.scripts.setup_notion --write-env
+
+sync-watchlist:
+	PYTHONPATH=backend backend/.venv/bin/python -m app.scripts.setup_notion --sync-holdings
 
 smoke-live:
 	PYTHONPATH=backend backend/.venv/bin/python -m app.scripts.smoke_live
@@ -35,5 +38,5 @@ typecheck:
 build:
 	cd glasses && npm run build
 
-pack: build
-	cd glasses && npx --yes @evenrealities/evenhub-cli pack app.json dist -o cockpit.ehpk --sdk-ver 0.0.16
+pack:
+	cd glasses && npm run pack

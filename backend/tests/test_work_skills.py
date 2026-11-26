@@ -25,7 +25,7 @@ def test_earnings_preview_skill_is_deterministic_zero_llm(tmp_path: Path) -> Non
     """earnings_preview runs strictly via Tier-0 code + SQLite with ZERO LLM worker calls."""
     app = _make_app(tmp_path)
     runtime = app.state.runtime
-    runtime.db.update_holding_next_check("NVDA", "Verify Q1 FY28 price hike timing")
+    runtime.db.update_holding_next_check("NTRA", "Verify Q4 Signatera ASP above $1,290")
 
     async def fail_if_llm_called(*_args, **_kwargs):
         raise AssertionError("LLM worker must not be called for earnings_preview")
@@ -36,69 +36,53 @@ def test_earnings_preview_skill_is_deterministic_zero_llm(tmp_path: Path) -> Non
     with TestClient(app) as client:
         resp = client.post(
             "/api/text",
-            json={"transcript": "Preview NVIDIA before earnings", "active_ticker": "TSM"},
+            json={"transcript": "Preview Natera before earnings", "active_ticker": "STX"},
         )
         assert resp.status_code == 200
         payload = resp.json()
         assert payload["decision"]["mind"] == "work"
         assert payload["decision"]["action"] == "earnings_preview"
         assert payload["decision"]["needs_llm_worker"] is False
-        assert payload["decision"]["holding"] == "NVDA"
+        assert payload["decision"]["holding"] == "NTRA"
         assert payload["pending_write"] is None
         assert payload["suggested_check"] is None
-        assert payload["hud"]["header"] == "PREVIEW · NVDA · PRE-CALL"
-        assert "margin trough" in payload["hud"]["body"]
-        assert "$108bn" in payload["hud"]["body"]
-        assert "Verify Q1 FY28 price hike timing" in payload["hud"]["body"]
+        assert payload["hud"]["header"] == "PREVIEW · NTRA · PRE-CALL"
+        assert "true-ups" in payload["hud"]["body"]
+        assert "29.2% wt" in payload["hud"]["body"]
+        assert "Verify Q4 Signatera ASP above $1,290" in payload["hud"]["body"]
 
 
-def test_peer_read_across_tsm_and_msft_to_nvda_with_preview_before_save(tmp_path: Path) -> None:
+def test_peer_read_across_amzn_to_stx_with_preview_before_save(tmp_path: Path) -> None:
     """
-    Peer read-across connects real TSMC / Microsoft filings to NVIDIA's thesis,
-    returns suggested_check (never an unseen pending_write), and saves to NVDA journal on confirm.
+    Peer read-across connects real Amazon AWS capex filings to Seagate's HAMR/Mozaic thesis,
+    returns suggested_check (never an unseen pending_write), and saves to STX journal on confirm.
     """
     with TestClient(_make_app(tmp_path)) as client:
-        # 1. TSMC -> NVIDIA read-across
-        r_tsm = client.post(
+        r_amzn = client.post(
             "/api/text",
-            json={"transcript": "What's the read-across from TSMC to NVIDIA?", "active_ticker": "NVDA"},
+            json={"transcript": "What does Amazon capex mean for Seagate?", "active_ticker": "STX"},
         )
-        assert r_tsm.status_code == 200
-        tsm_data = r_tsm.json()
-        assert tsm_data["decision"]["action"] == "peer_read_across"
-        assert tsm_data["decision"]["holding"] == "NVDA"
-        assert tsm_data["decision"]["peer_holding"] == "TSM"
-        assert tsm_data["decision"]["needs_llm_worker"] is True
-        assert tsm_data["pending_write"] is None
-        assert tsm_data["suggested_check"] is not None
-        assert tsm_data["suggested_check"]["ticker"] == "NVDA"
-        assert "TSMC" in tsm_data["hud"]["body"] or "CoWoS" in tsm_data["hud"]["body"]
-        assert tsm_data["hud"]["header"] == "PEER · TSM → NVDA"
+        assert r_amzn.status_code == 200
+        amzn_data = r_amzn.json()
+        assert amzn_data["decision"]["action"] == "peer_read_across"
+        assert amzn_data["decision"]["holding"] == "STX"
+        assert amzn_data["decision"]["peer_holding"] == "AMZN"
+        assert amzn_data["decision"]["needs_llm_worker"] is True
+        assert amzn_data["pending_write"] is None
+        assert amzn_data["suggested_check"] is not None
+        assert amzn_data["suggested_check"]["ticker"] == "STX"
+        assert "$220B" in amzn_data["hud"]["body"]
+        assert amzn_data["hud"]["header"] == "PEER · AMZN → STX"
 
         # Preview exact proposed check before confirming
-        staged = client.post("/api/stage-check", json=tsm_data["suggested_check"])
+        staged = client.post("/api/stage-check", json=amzn_data["suggested_check"])
         assert staged.status_code == 200
-        assert staged.json()["hud"]["body"] == tsm_data["suggested_check"]["content"]
+        assert staged.json()["hud"]["body"] == amzn_data["suggested_check"]["content"]
 
         saved = client.post("/api/confirm", json={"pending_id": staged.json()["pending_write"]["id"]})
         assert saved.status_code == 200
-        assert saved.json()["entry"]["ticker"] == "NVDA"
+        assert saved.json()["entry"]["ticker"] == "STX"
         assert "Peer read:" in (saved.json()["entry"]["source_citation"] or "")
-
-        # 2. Microsoft -> NVIDIA read-across
-        r_msft = client.post(
-            "/api/text",
-            json={"transcript": "What does Microsoft capex mean for NVIDIA?", "active_ticker": "NVDA"},
-        )
-        assert r_msft.status_code == 200
-        msft_data = r_msft.json()
-        assert msft_data["decision"]["action"] == "peer_read_across"
-        assert msft_data["decision"]["holding"] == "NVDA"
-        assert msft_data["decision"]["peer_holding"] == "MSFT"
-        assert msft_data["hud"]["header"] == "PEER · MSFT → NVDA"
-        assert "$50bn" in msft_data["hud"]["body"]
-        assert msft_data["pending_write"] is None
-        assert msft_data["suggested_check"] is not None
 
 
 def test_peer_read_across_unsupported_topic_returns_no_match(tmp_path: Path) -> None:
@@ -106,8 +90,8 @@ def test_peer_read_across_unsupported_topic_returns_no_match(tmp_path: Path) -> 
         resp = client.post(
             "/api/text",
             json={
-                "transcript": "What's the read-across from TSMC to NVIDIA on warranty reserves?",
-                "active_ticker": "NVDA",
+                "transcript": "What's the read-across from Amazon to Seagate on warranty reserves?",
+                "active_ticker": "STX",
             },
         )
         assert resp.status_code == 200
@@ -119,148 +103,144 @@ def test_peer_read_across_unsupported_topic_returns_no_match(tmp_path: Path) -> 
         assert payload["suggested_check"] is None
 
 
-def test_peer_read_across_topic_specific_margin_uses_selected_passage_not_canned_cowos(
+def test_peer_read_across_topic_specific_margin_uses_selected_passage_not_canned_capex(
     tmp_path: Path,
 ) -> None:
     """
-    Asking specifically about TSMC gross-margin read-across to NVIDIA must derive BOTH the
-    fallback card and proposed check from the selected margin passage (66.4% / N2 ramp),
-    never from a canned CoWoS/revenue narrative mismatched with the citation.
+    Asking specifically about Amazon AWS operating margin read-across to Seagate must derive BOTH
+    the fallback card and proposed check from the selected AWS margin passage (38.7% / $46.0B),
+    never from a mismatched capex narrative.
     """
     with TestClient(_make_app(tmp_path)) as client:
         resp = client.post(
             "/api/text",
             json={
-                "transcript": "What's the TSMC gross margin read-across to NVIDIA?",
-                "active_ticker": "NVDA",
+                "transcript": "What's the Amazon AWS operating margin read-across to Seagate?",
+                "active_ticker": "STX",
             },
         )
         assert resp.status_code == 200
         payload = resp.json()
         assert payload["decision"]["action"] == "peer_read_across"
-        assert payload["hud"]["header"] == "PEER · TSM → NVDA"
-        assert "66.4%" in payload["hud"]["body"]
-        assert "TSMC Q3 2026 PR" in payload["hud"]["body"]
-        assert "CoWoS" not in payload["hud"]["body"]
-        assert "66.4%" in payload["suggested_check"]["content"]
-        assert "CoWoS" not in payload["suggested_check"]["content"]
-        assert payload["suggested_check"]["source_citation"] == "Peer read: TSMC Q3 2026 PR · Oct 15"
+        assert payload["hud"]["header"] == "PEER · AMZN → STX"
+        assert "38.7%" in payload["hud"]["body"]
+        assert "AMZN Q3 2026 PR" in payload["hud"]["body"]
+        assert "38.7%" in payload["suggested_check"]["content"]
+        assert payload["suggested_check"]["source_citation"] == "Peer read: AMZN Q3 2026 PR · Oct 29"
 
 
-def test_seed_migrates_legacy_placeholders_idempotently_while_preserving_user_data(
+def test_seed_migrates_legacy_demo_portfolio_and_placeholders_while_preserving_journal(
     tmp_path: Path,
 ) -> None:
-    """Upgrading a pre-existing DB with placeholder TSM/MSFT rows replaces placeholders without clobbering user data."""
-    db = CockpitDB(tmp_path / "legacy.db")
+    """
+    1. Upgrading a DB with the old NVDA/MSFT/TSM demo seed swaps in NTRA/STX/AMZN while keeping journal entries.
+    2. Upgrading placeholder NTRA/STX/AMZN rows replaces placeholders while preserving custom questions/checks.
+    """
+    # Part 1: Legacy NVDA/MSFT/TSM demo DB migrates cleanly to NTRA/STX/AMZN
+    legacy_db = CockpitDB(tmp_path / "legacy_nvda.db")
+    for ticker in ("NVDA", "MSFT", "TSM"):
+        legacy_db.upsert_holding(
+            HoldingRecord(
+                ticker=ticker,
+                company=ticker,
+                saved_question=f"Old {ticker} question",
+                verdict=Verdict.HELD,
+                latest_finding="Old finding",
+                source_citation="Old source",
+            )
+        )
+    legacy_db.add_journal_entry(mind=Mind.PERSONAL, kind="task", content="Buy birthday present")
 
-    # Seed legacy placeholder holdings and chunks exactly as created by PR #1-#3
-    db.upsert_holding(
+    seed_if_empty(legacy_db)
+    assert [h.ticker for h in legacy_db.list_holdings()] == ["NTRA", "STX", "AMZN"]
+    assert legacy_db.list_journal_entries()[0].content == "Buy birthday present"
+
+    # Part 2: Placeholder STX/AMZN rows upgrade idempotently while keeping custom user fields
+    ph_db = CockpitDB(tmp_path / "placeholders.db")
+    ph_db.upsert_holding(
         HoldingRecord(
-            ticker="NVDA",
-            company="NVIDIA Corp.",
-            saved_question="Does NVIDIA expect the margin trough to get deeper?",
-            verdict=Verdict.HELD,
-            latest_finding="Q4 FY27 gross margin guide · 71-72%.",
-            source_citation="Q3 FY27 PR · Nov 17",
-            suggested_next_check="Check price hikes",
-            next_check="Custom NVDA check",
-            notion_page_id="nvda-notion-1",
-            updated_at="2026-11-24T00:00:00Z",
-        )
-    )
-    db.upsert_holding(
-        HoldingRecord(
-            ticker="MSFT",
-            company="Microsoft Corp. (placeholder slot — swap real filings)",
-            saved_question="My custom Microsoft Azure capex question?",
-            verdict=Verdict.WATCH,
-            latest_finding="Seed placeholder ready for real MSFT issuer release/transcript ingestion.",
-            source_citation="Replace with real filing excerpt",
-            suggested_next_check="Check Azure capacity ramp cadence next quarter",
-            next_check="My custom MSFT next check",
-            notion_page_id="msft-notion-1",
-            updated_at="2026-11-24T00:00:00Z",
-        )
-    )
-    db.upsert_holding(
-        HoldingRecord(
-            ticker="TSM",
-            company="TSMC (placeholder slot — swap real filings)",
-            saved_question="My custom TSMC N2 margin question?",
+            ticker="NTRA",
+            company="Natera, Inc. (29.2%)",
+            saved_question="Is Natera's underlying gross margin expanding without revenue true-ups?",
             verdict=Verdict.AHEAD,
-            latest_finding="Seed placeholder ready for real TSMC issuer release/transcript ingestion.",
-            source_citation="Replace with real filing excerpt",
-            suggested_next_check="Check N2 utilization",
-            next_check="My custom TSM next check",
-            notion_page_id="tsm-notion-1",
-            updated_at="2026-11-24T00:00:00Z",
+            latest_finding="Q3 GAAP GM 64.7%.",
+            source_citation="NTRA Q3 2026 PR · Nov 5",
+            next_check="Custom NTRA check",
+            notion_page_id="ntra-notion-1",
         )
     )
-    db.insert_chunks(
+    ph_db.upsert_holding(
+        HoldingRecord(
+            ticker="STX",
+            company="Seagate (placeholder slot — swap real filings)",
+            saved_question="My custom Seagate HAMR question?",
+            verdict=Verdict.WATCH,
+            latest_finding="Seed placeholder ready for real STX filing.",
+            source_citation="Replace with real filing excerpt",
+            next_check="My custom STX next check",
+            notion_page_id="stx-notion-1",
+        )
+    )
+    ph_db.upsert_holding(
+        HoldingRecord(
+            ticker="AMZN",
+            company="Amazon (placeholder slot — swap real filings)",
+            saved_question="My custom Amazon AWS capex question?",
+            verdict=Verdict.AHEAD,
+            latest_finding="Seed placeholder ready for real AMZN filing.",
+            source_citation="Replace with real filing excerpt",
+            next_check="My custom AMZN next check",
+            notion_page_id="amzn-notion-1",
+        )
+    )
+    ph_db.insert_chunks(
         [
             {
-                "ticker": "MSFT",
-                "doc_title": "Placeholder Issuer Filing Slot (MSFT)",
+                "ticker": "STX",
+                "doc_title": "Placeholder Issuer Filing Slot (STX)",
                 "doc_date": "2026-11-01",
                 "page_ref": "Placeholder · Replace with real filing",
-                "topic": "azure cloud",
-                "headline": "MSFT placeholder finding",
-                "summary_card": "Placeholder MSFT card",
+                "topic": "hamr",
+                "headline": "STX placeholder",
+                "summary_card": "Placeholder STX",
                 "verdict": Verdict.WATCH.value,
                 "suggested_next_check": "Placeholder check",
-                "excerpt": "Placeholder passage for MSFT.",
+                "excerpt": "Placeholder STX excerpt.",
                 "source_url": "",
             },
             {
-                "ticker": "TSM",
-                "doc_title": "Placeholder Issuer Filing Slot (TSM)",
+                "ticker": "AMZN",
+                "doc_title": "Placeholder Issuer Filing Slot (AMZN)",
                 "doc_date": "2026-11-01",
                 "page_ref": "Placeholder · Replace with real filing",
-                "topic": "n2 wafer",
-                "headline": "TSM placeholder finding",
-                "summary_card": "Placeholder TSM card",
+                "topic": "aws",
+                "headline": "AMZN placeholder",
+                "summary_card": "Placeholder AMZN",
                 "verdict": Verdict.AHEAD.value,
                 "suggested_next_check": "Placeholder check",
-                "excerpt": "Placeholder passage for TSM.",
+                "excerpt": "Placeholder AMZN excerpt.",
                 "source_url": "",
             },
         ]
     )
-    db.add_journal_entry(mind=Mind.PERSONAL, kind="task", content="Buy birthday present")
 
-    # Run migration twice to confirm idempotency
-    seed_if_empty(db)
-    chunk_count_after_first = db.count_chunks()
-    seed_if_empty(db)
-    assert db.count_chunks() == chunk_count_after_first
+    seed_if_empty(ph_db)
+    count_after_first = ph_db.count_chunks()
+    seed_if_empty(ph_db)
+    assert ph_db.count_chunks() == count_after_first
 
-    # Real filings replaced placeholders and are searchable in FTS5
-    retriever = DocumentRetriever(db)
-    tsm_hits = retriever.retrieve("TSM", "CoWoS packaging", limit=4)
-    assert len(tsm_hits) == 1
-    assert "$52.3-$54.3 billion" in tsm_hits[0].excerpt
+    retriever = DocumentRetriever(ph_db)
+    stx_hits = retriever.retrieve("STX", "Mozaic HAMR Azure", limit=4)
+    assert len(stx_hits) == 1
+    assert "198 exabytes" in stx_hits[0].excerpt
 
-    msft_hits = retriever.retrieve("MSFT", "GB300 capex", limit=4)
-    assert len(msft_hits) == 1
-    assert "$45.2 billion" in msft_hits[0].excerpt
+    amzn_hits = retriever.retrieve("AMZN", "AWS capex data centers", limit=4)
+    assert len(amzn_hits) >= 1
+    assert any("$220 billion" in hit.excerpt for hit in amzn_hits)
 
-    # Holding metadata upgraded while user saved_question, next_check, notion_page_id, and journal survive
-    msft = db.get_holding("MSFT")
-    assert msft is not None
-    assert "placeholder" not in msft.company.lower()
-    assert "48% YoY" in msft.latest_finding
-    assert msft.saved_question == "My custom Microsoft Azure capex question?"
-    assert msft.next_check == "My custom MSFT next check"
-    assert msft.notion_page_id == "msft-notion-1"
-
-    tsm = db.get_holding("TSM")
-    assert tsm is not None
-    assert "placeholder" not in tsm.company.lower()
-    assert "66.4%" in tsm.latest_finding
-    assert tsm.saved_question == "My custom TSMC N2 margin question?"
-    assert tsm.next_check == "My custom TSM next check"
-    assert tsm.notion_page_id == "tsm-notion-1"
-
-    journal = db.list_journal_entries()
-    assert len(journal) == 1
-    assert journal[0].content == "Buy birthday present"
+    stx = ph_db.get_holding("STX")
+    assert stx is not None
+    assert "placeholder" not in stx.company.lower()
+    assert stx.saved_question == "My custom Seagate HAMR question?"
+    assert stx.next_check == "My custom STX next check"
+    assert stx.notion_page_id == "stx-notion-1"

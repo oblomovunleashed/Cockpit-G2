@@ -47,14 +47,19 @@ def test_health_state_and_voice_endpoint(tmp_path: Path) -> None:
 
         state = client.get("/api/state")
         assert state.status_code == 200
-        assert len(state.json()["holdings"]) == 3
+        assert [h["ticker"] for h in state.json()["holdings"]] == ["NTRA", "STX", "AMZN"]
+
+        portfolio = client.get("/api/portfolio")
+        assert portfolio.status_code == 200
+        assert portfolio.json()["total_positions"] == 61
+        assert portfolio.json()["total_weight_pct"] == 100.0
 
         wav = _make_dummy_wav()
         voice = client.post(
             "/api/voice",
             files={"audio": ("clip.wav", wav, "audio/wav")},
             data={
-                "active_ticker": "NVDA",
+                "active_ticker": "NTRA",
                 "fallback_transcript": "Remember to buy a birthday present",
             },
         )
@@ -71,12 +76,12 @@ def test_health_state_and_voice_endpoint(tmp_path: Path) -> None:
 
 def test_zero_dictation_one_tap_suggested_check(tmp_path: Path) -> None:
     with make_client(tmp_path) as client:
-        staged = client.post("/api/holdings/NVDA/stage-suggested-check")
+        staged = client.post("/api/holdings/NTRA/stage-suggested-check")
         assert staged.status_code == 200
         pending = staged.json()["pending_write"]
-        assert pending["ticker"] == "NVDA"
-        assert "Q1 FY28" in pending["content"]
+        assert pending["ticker"] == "NTRA"
+        assert "$1,290" in pending["content"]
 
         confirmed = client.post("/api/confirm", json={"pending_id": pending["id"]})
         assert confirmed.status_code == 200
-        assert "Q1 FY28" in confirmed.json()["holding"]["next_check"]
+        assert "$1,290" in confirmed.json()["holding"]["next_check"]

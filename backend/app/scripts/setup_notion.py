@@ -198,11 +198,56 @@ async def run_setup(write_env: bool) -> None:
     print("\nNotion setup complete! Run `make smoke-live` to verify OpenRouter + Notion end to end.")
 
 
+async def sync_existing_watchlist() -> None:
+    """Syncs the current seeded holdings (NTRA, STX, AMZN) into an already-created Notion Holdings Watchlist."""
+    settings = Settings()
+    notion = NotionSync(settings)
+    if not notion.holdings_enabled:
+        raise SystemExit(
+            "Missing NOTION_TOKEN or NOTION_HOLDINGS_DATABASE_ID in .env. Run `make setup-notion` first."
+        )
+    db = CockpitDB(settings.cockpit_db_path)
+    seed_if_empty(db)
+    existing = await notion.pull_holdings()
+    active_tickers = {h.ticker.upper() for h in db.list_holdings()}
+
+    # Archive legacy NVDA/MSFT/TSM rows if migrating an existing watchlist to the updated portfolio
+    for legacy_ticker in ("NVDA", "MSFT", "TSM"):
+        if legacy_ticker not in active_tickers and legacy_ticker in existing:
+            ok = await notion.archive_page(existing[legacy_ticker].notion_page_id)
+            print(f"  Archived legacy {legacy_ticker} row -> {ok}")
+
+    for holding in db.list_holdings():
+        existing_snap = existing.get(holding.ticker.upper())
+        target = holding.model_copy(
+            update={"notion_page_id": existing_snap.notion_page_id if existing_snap else holding.notion_page_id}
+        )
+        page_id = await notion.sync_holding_update(
+            target,
+            include_finding=True,
+            include_saved_question=True,
+            include_next_check=True,
+        )
+        if page_id:
+            db.update_holding_notion_page_id(holding.ticker, page_id)
+            print(f"  Synced {holding.ticker} ({holding.company}) -> Notion page {page_id}")
+        else:
+            print(f"  Warning: failed to sync {holding.ticker} into Notion")
+
+
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Create Cockpit Log & Holdings Watchlist databases in Notion.")
+    parser = argparse.ArgumentParser(description="Create or sync Cockpit Log & Holdings Watchlist databases in Notion.")
     parser.add_argument("--write-env", action="store_true", help="Write created database IDs directly into .env")
+    parser.add_argument(
+        "--sync-holdings",
+        action="store_true",
+        help="Sync seeded holdings into an existing Notion Holdings Watchlist (archives legacy NVDA/MSFT/TSM rows).",
+    )
     args = parser.parse_args()
-    asyncio.run(run_setup(write_env=args.write_env))
+    if args.sync_holdings:
+        asyncio.run(sync_existing_watchlist())
+    else:
+        asyncio.run(run_setup(write_env=args.write_env))
 
 
 if __name__ == "__main__":

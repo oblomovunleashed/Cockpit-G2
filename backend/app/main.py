@@ -28,6 +28,12 @@ from app.models import (
     UtteranceRequest,
     UtteranceResponse,
 )
+from app.portfolio import (
+    PORTFOLIO_BY_TICKER,
+    PORTFOLIO_POSITIONS,
+    format_weight_badge,
+    lookup_portfolio_position,
+)
 from app.seed import seed_if_empty
 from app.services.jev_router import JevRouter, heuristic_needs_enrichment
 from app.services.job_runner import AsyncJobQueue, BackgroundJobRunner
@@ -328,7 +334,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         # --------------------------------------------------------------
         if decision.action == ActionType.DRAFT_NEXT_CHECK:
             if decision.holding is None and decision.requested_company:
-                ticker: str | None = decision.requested_company.split("(")[-1].rstrip(")").upper()[:8]
+                pos = lookup_portfolio_position(decision.requested_company)
+                ticker: str | None = pos.ticker if pos else None
                 holding = None
             else:
                 raw_ticker = decision.holding or active_ticker
@@ -361,13 +368,18 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         # --------------------------------------------------------------
         if decision.action == ActionType.EARNINGS_PREVIEW:
             if decision.holding is None and decision.requested_company:
+                pre_weight = None if cfg.live_openrouter_enabled else format_weight_badge(decision.requested_company)
                 resolved_ticker, finding, source_label, draft = await worker.synthesize_adhoc_earnings(
                     company_query=decision.requested_company,
                     mode="preview",
                     utterance=transcript,
+                    portfolio_weight_label=pre_weight,
                 )
+                pos = PORTFOLIO_BY_TICKER.get(resolved_ticker.upper())
+                wt_label = pos.weight_label if pos else None
+                ticker_badge = f"{resolved_ticker} ({wt_label})" if wt_label else resolved_ticker
                 hud = HudCard(
-                    header=_clip(f"PREVIEW · {resolved_ticker} · WEB", 60),
+                    header=_clip(f"PREVIEW · {ticker_badge} · WEB", 60),
                     body=_clip(f"{finding}\n[Web: {source_label}]", 240),
                     footer="Tap: save watchpoint · Swipe: watchlist",
                 )
@@ -384,7 +396,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             if not raw_ticker:
                 hud = HudCard(
                     header="WORK · WHICH COMPANY?",
-                    body="Name any company to preview (e.g. NVIDIA, Alphabet, TSMC) or swipe into your watchlist.",
+                    body="Name any company to preview (e.g. Natera, Seagate, Insmed, Alphabet) or swipe into your watchlist.",
                     footer="Hold: ask with company · Swipe: watchlist",
                 )
                 return UtteranceResponse(
@@ -410,10 +422,39 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             )
 
         # --------------------------------------------------------------
-        # WORK SKILL 2 (TIER 1 + TIER 2): PEER READ-ACROSS (e.g. TSM -> NVDA)
+        # WORK SKILL 2 (TIER 1 + TIER 2): PEER READ-ACROSS (e.g. AMZN -> STX)
         # --------------------------------------------------------------
         if decision.action == ActionType.PEER_READ_ACROSS:
-            target_ticker = (decision.holding or active_ticker or (tickers[0] if tickers else "NVDA")).upper()
+            raw_target = decision.holding
+            if not raw_target and decision.requested_company is None:
+                raw_target = active_ticker
+
+            if not raw_target:
+                indexed_list = ", ".join(tickers)
+                unsupported_label = decision.requested_company or "That company"
+                if "(" in unsupported_label and unsupported_label.endswith(")"):
+                    unsupported_label = unsupported_label.split("(")[-1].rstrip(")")
+                elif len(unsupported_label) > 24 or len(unsupported_label.split()) > 3:
+                    unsupported_label = "That company"
+                hud = HudCard(
+                    header="WORK · PEER READ · CLARIFY",
+                    body=_clip(
+                        f"{unsupported_label} isn't in indexed peer filings ({indexed_list}). "
+                        f"Ask for an indexed pair or preview it on web.",
+                        240,
+                    ),
+                    footer="Hold: e.g. 'What does Amazon capex mean for Seagate?'",
+                )
+                return UtteranceResponse(
+                    transcript=transcript,
+                    decision=decision,
+                    hud=hud,
+                    holding=None,
+                    pending_write=None,
+                    suggested_check=None,
+                )
+
+            target_ticker = raw_target.upper()
             target_holding = await refresh_holding_from_notion(target_ticker) or db.get_holding(target_ticker)
             if target_holding is None:
                 raise HTTPException(status_code=404, detail=f"Holding not found: {target_ticker}")
@@ -421,10 +462,22 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             peer_ticker = (decision.peer_holding or "").upper()
             if not peer_ticker or peer_ticker == target_ticker or db.get_holding(peer_ticker) is None:
                 peers = ", ".join(t for t in tickers if t != target_ticker)
+                if decision.requested_company:
+                    peer_label = decision.requested_company
+                    if "(" in peer_label and peer_label.endswith(")"):
+                        peer_label = peer_label.split("(")[-1].rstrip(")")
+                    elif len(peer_label) > 24 or len(peer_label.split()) > 3:
+                        peer_label = "That peer"
+                    body = (
+                        f"{peer_label} isn't in indexed peer filings for {target_ticker} "
+                        f"(indexed peers: {peers}). Ask for an indexed peer or preview it on web."
+                    )
+                else:
+                    body = f"Specify a peer to read across to {target_ticker} (available: {peers})."
                 hud = HudCard(
                     header=_clip(f"WORK · PEER READ · {target_ticker}", 60),
-                    body=_clip(f"Specify a peer to read across to {target_ticker} (available: {peers}).", 240),
-                    footer="Hold: e.g. 'Read-across from TSMC to NVIDIA'",
+                    body=_clip(body, 240),
+                    footer="Hold: e.g. 'What does Amazon capex mean for Seagate?'",
                 )
                 return UtteranceResponse(
                     transcript=transcript,
@@ -532,19 +585,24 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             )
 
         # --------------------------------------------------------------
-        # WORK SKILL 3: AD-HOC WEB EARNINGS REVIEW / FOLLOW-UP (NON-HELD)
+        # WORK SKILL 3: AD-HOC WEB EARNINGS REVIEW / FOLLOW-UP (PORTFOLIO OR EXTERNAL)
         # --------------------------------------------------------------
         if decision.holding is None and decision.requested_company:
             mode = "followup" if decision.action == ActionType.FOLLOW_UP_SOURCE else "review"
+            pre_weight = None if cfg.live_openrouter_enabled else format_weight_badge(decision.requested_company)
             resolved_ticker, finding, source_label, draft = await worker.synthesize_adhoc_earnings(
                 company_query=decision.requested_company,
                 mode=mode,
                 utterance=transcript,
+                portfolio_weight_label=pre_weight,
             )
+            pos = PORTFOLIO_BY_TICKER.get(resolved_ticker.upper())
+            wt_label = pos.weight_label if pos else None
+            ticker_badge = f"{resolved_ticker} ({wt_label})" if wt_label else resolved_ticker
             hud = HudCard(
-                header=_clip(f"WORK · {resolved_ticker} · WEB", 60),
+                header=_clip(f"WORK · {ticker_badge} · WEB", 60),
                 body=_clip(f"{finding}\n[Web: {source_label}]", 240),
-                footer="Tap: save watchpoint · Swipe: deck",
+                footer="Tap: save watchpoint · Swipe: watchlist",
             )
             return UtteranceResponse(
                 transcript=transcript,
@@ -562,7 +620,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if not raw_ticker:
             hud = HudCard(
                 header="WORK · WHICH COMPANY?",
-                body="Name any company (e.g. NVIDIA, Alphabet, TSMC) or swipe into your watchlist.",
+                body="Name any company (e.g. Natera, Seagate, Insmed, Alphabet) or swipe into your watchlist.",
                 footer="Hold: ask with company · Swipe: watchlist",
             )
             return UtteranceResponse(
@@ -660,6 +718,21 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.get("/api/holdings", response_model=list[HoldingRecord])
     async def list_holdings() -> list[HoldingRecord]:
         return db.list_holdings()
+
+    @app.get("/api/portfolio")
+    async def list_full_portfolio() -> dict[str, object]:
+        return {
+            "total_positions": len(PORTFOLIO_POSITIONS),
+            "total_weight_pct": round(sum(p.weight_pct for p in PORTFOLIO_POSITIONS), 2),
+            "positions": [
+                {
+                    "ticker": p.ticker,
+                    "company": p.company,
+                    "weight_pct": p.weight_pct,
+                }
+                for p in PORTFOLIO_POSITIONS
+            ],
+        }
 
     @app.patch("/api/holdings/{ticker}/question")
     async def update_holding_question(ticker: str, body: UpdateQuestionRequest) -> dict[str, object]:

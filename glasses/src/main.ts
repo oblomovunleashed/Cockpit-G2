@@ -38,8 +38,8 @@ import type {
   UtteranceResponse,
 } from './types';
 
-const NVDA_MARGIN_Q = 'Does NVIDIA expect the margin trough to get deeper?';
-const NVDA_REVENUE_Q = "Is revenue running ahead of management's guidance?";
+const NTRA_MARGIN_Q = "Is Natera's underlying gross margin expanding without revenue true-ups?";
+const NTRA_GROWTH_Q = 'Is Signatera volume and revenue running ahead of full-year guidance?';
 
 const api = new CockpitApiClient();
 const recorder = new PcmAudioRecorder();
@@ -666,16 +666,16 @@ function wireCompanionControls(): void {
     if (state.mode === 'PROCESSING' || isAnyMicRecording()) return;
     stopEnrichmentPoll();
     await discardPendingWriteIfAny();
-    const nvda = state.holdings.find((h) => h.ticker === 'NVDA');
-    const nextQ = nvda?.saved_question === NVDA_MARGIN_Q ? NVDA_REVENUE_Q : NVDA_MARGIN_Q;
-    const updated = await api.updateHoldingQuestion('NVDA', nextQ);
-    const idx = state.holdings.findIndex((h) => h.ticker === 'NVDA');
+    const ntra = state.holdings.find((h) => h.ticker === 'NTRA');
+    const nextQ = ntra?.saved_question === NTRA_MARGIN_Q ? NTRA_GROWTH_Q : NTRA_MARGIN_Q;
+    const updated = await api.updateHoldingQuestion('NTRA', nextQ);
+    const idx = state.holdings.findIndex((h) => h.ticker === 'NTRA');
     if (idx >= 0) {
       state.holdings[idx] = updated.holding;
       state.holdingIndex = idx;
     }
     state.returnMode = 'BRIEFING';
-    state.activeTicker = 'NVDA';
+    state.activeTicker = 'NTRA';
     state.mode = 'BRIEFING';
     await showCard(updated.hud);
   });

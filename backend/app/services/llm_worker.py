@@ -85,11 +85,42 @@ def resolve_relative_date(text: str, today: date) -> str | None:
     return None
 
 
+def _normalize_url(url: str) -> str:
+    return url.strip().rstrip("/")
+
+
+def _pick_provider_cited_url(candidate: str, citation_urls: list[str]) -> str:
+    """
+    Only publishes URLs backed by OpenRouter's provider `annotations` (`url_citation`).
+    Never trusts an unverified model-invented link.
+    """
+    provider_urls = [u.strip() for u in citation_urls if u.strip().startswith(("http://", "https://"))]
+    if not provider_urls:
+        return ""
+    norm_candidate = _normalize_url(candidate)
+    if norm_candidate:
+        for cited in provider_urls:
+            if _normalize_url(cited) == norm_candidate:
+                return cited
+    return provider_urls[0]
+
+
+_MOCK_SHORTHAND_TICKERS: dict[str, str] = {
+    "alphabet": "GOOGL",
+    "google": "GOOGL",
+    "apple": "AAPL",
+    "tsmc": "TSM",
+}
+
+
 def _derive_short_ticker(company_query: str) -> str:
     m = _TICKER_IN_PARENS_RE.search(company_query)
     if m:
         return m.group(1)
-    letters = re.sub(r"[^A-Za-z]", "", company_query.split()[0] if company_query.strip() else "")
+    first_word = company_query.split()[0].strip(".,?!") if company_query.strip() else ""
+    if first_word.lower() in _MOCK_SHORTHAND_TICKERS:
+        return _MOCK_SHORTHAND_TICKERS[first_word.lower()]
+    letters = re.sub(r"[^A-Za-z]", "", first_word)
     return (letters[:6] or "EQUITY").upper()
 
 
@@ -155,7 +186,7 @@ class LLMWorker:
     ) -> tuple[str, DraftCheck]:
         """
         Cross-company synthesis skill: connects a verified peer filing passage
-        (e.g. TSMC CoWoS / Microsoft capex) to the target holding's saved thesis question.
+        (e.g. Amazon capex / Seagate HAMR supply) to the target holding's saved thesis question.
         """
         fallback_finding, fallback_draft = build_grounded_peer_read_across(
             target=target,
@@ -201,6 +232,7 @@ class LLMWorker:
         company_query: str,
         mode: Literal["preview", "review", "followup"],
         utterance: str,
+        portfolio_weight_label: str | None = None,
         today_date: date | None = None,
     ) -> tuple[str, str, str, DraftCheck]:
         """
@@ -209,11 +241,17 @@ class LLMWorker:
         """
         today = today_date or datetime.now(timezone.utc).date()
         short_ticker = _derive_short_ticker(company_query)
+        holding_note = (
+            f"Held portfolio position ({portfolio_weight_label} weight)"
+            if portfolio_weight_label
+            else "External company (not in portfolio)"
+        )
 
         if not self.settings.live_openrouter_enabled:
             action_label = "preview" if mode == "preview" else "review"
+            wt_part = f" [{portfolio_weight_label} portfolio weight]" if portfolio_weight_label else ""
             finding = (
-                f"{company_query} earnings {action_label}: live OpenRouter web search is off (mock mode). "
+                f"{company_query}{wt_part} earnings {action_label}: live OpenRouter web search is off (mock mode). "
                 f"Enable live OpenRouter to fetch current {today.year} watchpoints."
             )
             source_label = "Offline mock"
@@ -242,19 +280,22 @@ class LLMWorker:
         system_prompt = (
             f"Today is {today.isoformat()} ({today.strftime('%A')}). "
             "You format single-glance equity research cards for Even Realities G2 monochrome smart glasses (576x288). "
+            "Identify the PRIMARY company the wearer is asking about from their utterance "
+            "(respect explicit share classes such as Fox Class B -> FOX vs Fox Class A -> FOXA, "
+            "and ignore incidental comparison mentions such as 'compared with ...'). "
             f"{mode_instruction} "
             "Plain text ONLY: no emojis, no markdown, no [text](url) links inside text fields, no investment advice. "
             "If web results do not contain a figure, do NOT fabricate it. Return strict JSON with keys: "
-            "'ticker' (uppercase symbol, e.g. GOOGL), "
+            "'ticker' (exact uppercase stock ticker, e.g. AAPL, FOX, INSM, GOOGL), "
             "'company' (short name), "
             "'finding' (<= 175 chars, dense with concrete numbers/watchpoints), "
             "'source_label' (<= 40 chars, e.g. 'Alphabet Q3 2026 IR' or 'Reuters · Nov 2026'), "
             "'suggested_next_check' (<= 95 chars, specific watch item for the next call)."
         )
         user_prompt = (
-            f"Company requested: {company_query}\n"
             f"Skill mode: {mode}\n"
-            f"Wearer utterance: {utterance}"
+            f"Wearer utterance: {utterance}\n"
+            f"Portfolio hint (if known): {holding_note}"
         )
 
         parsed, citation_urls = await self._call_json_llm(
@@ -367,9 +408,8 @@ class LLMWorker:
         resolved = bool(parsed.get("resolved", False))
         needs_detail = bool(parsed.get("needs_detail", False))
         summary = strip_markdown(str(parsed.get("enriched_summary", "")))
-        raw_url = str(parsed.get("url", "") or "").strip()
-        if not raw_url.startswith(("http://", "https://")):
-            raw_url = citation_urls[0] if (resolved and citation_urls) else ""
+        model_url = str(parsed.get("url", "") or "").strip()
+        verified_url = _pick_provider_cited_url(model_url, citation_urls) if resolved else ""
 
         raw_due = parsed.get("due_date")
         due_date = local_due
@@ -390,7 +430,7 @@ class LLMWorker:
         return EnrichmentResult(
             status="enriched",
             enriched_summary=(summary or "Enriched context saved.")[:220],
-            enriched_url=raw_url[:500],
+            enriched_url=verified_url[:500],
             due_date=due_date,
         )
 

@@ -26,7 +26,7 @@ class OpenRouterSTT:
         if not self.settings.live_openrouter_enabled:
             if fallback_transcript:
                 return fallback_transcript.strip()
-            return "Can we review NVIDIA earnings?"
+            return "Can we review Natera earnings?"
 
         encoded_audio = base64.b64encode(wav_bytes).decode("ascii")
         url = f"{self.settings.openrouter_base_url.rstrip('/')}/v1/audio/transcriptions"

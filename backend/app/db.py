@@ -322,6 +322,59 @@ class CockpitDB:
             )
         return len(new_chunks)
 
+    def migrate_legacy_demo_portfolio(
+        self,
+        new_holdings: list[HoldingRecord],
+        new_chunks: list[dict[str, str]],
+    ) -> bool:
+        """
+        Idempotently replaces the initial NVDA/MSFT/TSM sample seed with the updated
+        NTRA/STX/AMZN core portfolio while preserving all confirmed journal entries.
+        Only runs when the holdings table contains exactly the legacy 3 sample tickers.
+        """
+        existing = self.list_holdings()
+        if {h.ticker.upper() for h in existing} != {"NVDA", "MSFT", "TSM"}:
+            return False
+
+        now = utc_now_iso()
+        with self._connect() as conn:
+            conn.execute("DELETE FROM holdings WHERE UPPER(ticker) IN ('NVDA', 'MSFT', 'TSM')")
+            conn.execute("DELETE FROM document_chunks WHERE UPPER(ticker) IN ('NVDA', 'MSFT', 'TSM')")
+            for holding in new_holdings:
+                conn.execute(
+                    """
+                    INSERT INTO holdings (
+                        ticker, company, saved_question, verdict, latest_finding,
+                        source_citation, suggested_next_check, next_check, notion_page_id, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        holding.ticker.upper(),
+                        holding.company,
+                        holding.saved_question,
+                        holding.verdict.value if holding.verdict is not None else "",
+                        holding.latest_finding,
+                        holding.source_citation,
+                        holding.suggested_next_check,
+                        holding.next_check,
+                        holding.notion_page_id,
+                        now,
+                    ),
+                )
+            conn.executemany(
+                """
+                INSERT INTO document_chunks (
+                    ticker, doc_title, doc_date, page_ref, topic, headline,
+                    summary_card, verdict, suggested_next_check, excerpt, source_url
+                ) VALUES (
+                    :ticker, :doc_title, :doc_date, :page_ref, :topic, :headline,
+                    :summary_card, :verdict, :suggested_next_check, :excerpt, :source_url
+                )
+                """,
+                new_chunks,
+            )
+        return True
+
     # ------------------------------------------------------------------
     # Document chunks
     # ------------------------------------------------------------------

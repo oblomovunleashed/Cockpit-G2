@@ -1,6 +1,6 @@
 {
   "name": "cockpit-g2-glasses",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
   "scripts": {
@@ -16,6 +16,7 @@
     "@evenrealities/even_hub_sdk": "^0.0.16"
   },
   "devDependencies": {
+    "@evenrealities/evenhub-cli": "^0.1.14",
     "@evenrealities/evenhub-simulator": "^0.9.5",
     "typescript": "^5.8.2",
     "vite": "^6.2.0"

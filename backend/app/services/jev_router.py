@@ -6,74 +6,9 @@ import httpx
 
 from app.config import Settings
 from app.models import ActionType, DocumentChunk, JevDecision, Mind, Verdict
+from app.portfolio import PORTFOLIO_BY_TICKER, match_portfolio_position_in_text
 from app.services.retrieval import extract_content_tokens
 
-
-TRACKED_ALIASES: dict[str, tuple[str, ...]] = {
-    "NVDA": ("nvda", "nvidia"),
-    "MSFT": ("msft", "microsoft", "azure"),
-    "TSM": ("tsm", "tsmc", "taiwan semiconductor"),
-}
-
-# Common non-watchlist public/private companies so explicit mentions never silently hijack active_ticker
-KNOWN_UNTRACKED_COMPANIES: dict[str, str] = {
-    "alphabet": "Alphabet (GOOGL)",
-    "google": "Alphabet (GOOGL)",
-    "googl": "Alphabet (GOOGL)",
-    "goog": "Alphabet (GOOGL)",
-    "apple": "Apple (AAPL)",
-    "aapl": "Apple (AAPL)",
-    "amazon": "Amazon (AMZN)",
-    "amzn": "Amazon (AMZN)",
-    "meta": "Meta Platforms (META)",
-    "facebook": "Meta Platforms (META)",
-    "tesla": "Tesla (TSLA)",
-    "tsla": "Tesla (TSLA)",
-    "amd": "AMD",
-    "broadcom": "Broadcom (AVGO)",
-    "avgo": "Broadcom (AVGO)",
-    "netflix": "Netflix (NFLX)",
-    "nflx": "Netflix (NFLX)",
-    "asml": "ASML",
-    "intel": "Intel (INTC)",
-    "intc": "Intel (INTC)",
-    "oracle": "Oracle (ORCL)",
-    "orcl": "Oracle (ORCL)",
-    "salesforce": "Salesforce (CRM)",
-    "palantir": "Palantir (PLTR)",
-    "pltr": "Palantir (PLTR)",
-    "uber": "Uber (UBER)",
-    "spotify": "Spotify (SPOT)",
-    "novo nordisk": "Novo Nordisk (NVO)",
-    "eli lilly": "Eli Lilly (LLY)",
-    "jpmorgan": "JPMorgan Chase (JPM)",
-    "berkshire": "Berkshire Hathaway (BRK.B)",
-    "costco": "Costco (COST)",
-    "walmart": "Walmart (WMT)",
-    "disney": "Disney (DIS)",
-    "sony": "Sony (SONY)",
-    "samsung": "Samsung Electronics",
-    "alibaba": "Alibaba (BABA)",
-    "arm": "Arm Holdings (ARM)",
-    "micron": "Micron (MU)",
-    "qualcomm": "Qualcomm (QCOM)",
-    "qcom": "Qualcomm (QCOM)",
-    "snowflake": "Snowflake (SNOW)",
-    "datadog": "Datadog (DDOG)",
-    "cloudflare": "Cloudflare (NET)",
-    "shopify": "Shopify (SHOP)",
-    "stripe": "Stripe",
-}
-
-_STOP_COMPANY_WORDS = {
-    "a", "an", "the", "this", "that", "these", "those", "my", "our", "your", "their",
-    "please", "can", "could", "would", "you", "we", "me", "us", "to", "for", "of",
-    "on", "in", "at", "about", "before", "after", "next", "last", "latest", "upcoming",
-    "recent", "current", "one", "holding", "company", "stock", "name", "earnings",
-    "preview", "review", "brief", "check", "update", "results", "quarter", "print",
-    "call", "guidance", "margin", "margins", "revenue", "what", "how", "why", "did",
-    "do", "does", "is", "are", "was", "were", "changed",
-}
 
 _RELATIVE_DATE_RE = re.compile(
     r"\b(tomorrow|tonight|today|yesterday|this weekend|next week|next month|"
@@ -86,6 +21,25 @@ _ENRICH_MEDIA_RE = re.compile(
     r"\b(podcast|episode|latest|book|article|essay|newsletter|interview|documentary|movie|film|paper|talk)\b",
     re.IGNORECASE,
 )
+
+# Strictly for offline mock mode (live Jev understands products & companies natively)
+_MOCK_PRODUCT_HINTS: dict[str, str] = {
+    "signatera": "NTRA",
+    "aws": "AMZN",
+    "hamr": "STX",
+    "mozaic": "STX",
+}
+
+_MOCK_FILLER_WORDS = {
+    "a", "an", "the", "this", "that", "my", "our", "your", "please", "can", "could",
+    "would", "you", "we", "me", "to", "for", "of", "on", "in", "at", "about", "before",
+    "after", "next", "last", "latest", "one", "holding", "company", "stock", "earnings",
+    "preview", "review", "brief", "check", "results", "quarter", "print", "call",
+    "guidance", "margin", "margins", "revenue", "capex", "what", "how", "why", "did",
+    "do", "does", "is", "are", "was", "were", "changed", "compared", "with", "vs",
+    "versus", "against", "read", "across", "read-across", "peer", "cross", "mean",
+    "means", "from", "and",
+}
 
 
 def _extract_noul_probability(answer: dict | None, default: float) -> float:
@@ -128,12 +82,12 @@ class JevRouter:
     System-1 decision router backed by TypeSafe Jev on OpenRouter
     (POST https://openrouter.ai/api/alpha/decisions).
 
-    Decides fast, typed routing on every utterance:
-      - Fast path ("logged, logged"): Personal task or Interests note -> NO blocking LLM on glasses
-        (optional async post-confirm enrichment when Jev flags `needs_enrichment`).
-      - Deep path ("llm worker"): Work thesis review, follow-up, peer read-across, or ad-hoc
-        earnings preview/review for any non-watchlist company -> wakes System-2 worker.
-    Includes a deterministic local fallback when COCKPIT_MOCK_MODE=true or no API key is set.
+    Live mode has zero hardcoded tickers or external company lists:
+      - Dynamic watchlist tickers/names come straight from SQLite / Notion.
+      - When Jev classifies an utterance as `holding = untracked`, the raw utterance
+        passes straight to the System-2 web LLM to resolve company + ticker, and
+        `portfolio.csv` stamps the portfolio weight via a 1-line dict lookup.
+    Includes a compact self-contained offline fallback when COCKPIT_MOCK_MODE=true.
     """
 
     def __init__(self, settings: Settings) -> None:
@@ -151,6 +105,7 @@ class JevRouter:
             return self._mock_route_utterance(
                 transcript,
                 available_tickers=available_tickers,
+                available_holdings=available_holdings,
                 active_ticker=active_ticker,
             )
 
@@ -161,15 +116,15 @@ class JevRouter:
             company = holdings_map.get(t.upper(), "")
             label = f"{t.upper()} ({company})" if company else t.upper()
             tracked_display.append(label)
-            ticker_criteria[t] = f"The wearer explicitly referred to {label} earnings or research."
+            ticker_criteria[t] = f"The wearer explicitly asked about {label} as the primary target company."
 
         ticker_criteria["untracked"] = (
-            "The wearer explicitly named a company or stock ticker that is NOT in the tracked watchlist "
-            "(for example Alphabet/Google, Apple, Amazon, Meta, Tesla, AMD, ASML, Broadcom, etc.)."
+            "The wearer explicitly named a primary target company or stock ticker that is NOT in the "
+            "indexed watchlist above (whether another portfolio holding or an external company)."
         )
         ticker_criteria["implicit_active"] = (
             "The wearer did NOT name any company and is referring implicitly to the currently displayed holding "
-            "(for example 'what changed?', 'preview this one', 'what did management say about margins?')."
+            "(for example 'what changed?', 'preview this one', 'what drove ASP and cash flow?')."
         )
         ticker_criteria["none"] = "Not about any company or stock."
 
@@ -177,12 +132,15 @@ class JevRouter:
             t: f"The peer/source company being read from is {holdings_map.get(t.upper(), t.upper())}."
             for t in available_tickers
         }
+        peer_criteria["untracked"] = (
+            "The wearer explicitly named a peer/source company that is NOT in the indexed watchlist above."
+        )
         peer_criteria["none"] = "No peer company or not a peer read-across."
 
         state_lines = [
             f"Utterance: {transcript}",
             f"Currently displayed holding on glasses: {active_ticker or 'none'}",
-            f"Tracked watchlist holdings: {', '.join(tracked_display) if tracked_display else 'none'}",
+            f"Indexed core watchlist holdings: {', '.join(tracked_display) if tracked_display else 'none'}",
         ]
         payload = {
             "model": self.settings.openrouter_jev_model,
@@ -203,10 +161,10 @@ class JevRouter:
                     "criteria": {
                         "log_note": "Save a short personal or interests reflection, podcast/book reaction, or general thought without blocking on an LLM.",
                         "log_task": "Save a short personal reminder, errand, gift, or to-do task without blocking on an LLM.",
-                        "earnings_preview": "Pre-earnings setup, preview, or checklist BEFORE a print for ANY company (held or not held), e.g. 'preview NVIDIA earnings', 'preview Alphabet earnings', 'what am I watching on TSMC?'.",
-                        "brief_holding": "Post-earnings thesis review or earnings summary for ANY company (held or not held), e.g. 'review NVIDIA earnings', 'review Apple earnings', 'what changed?'.",
-                        "follow_up_source": "Ask a specific factual follow-up question about one company's metric, driver, margin recovery, management comment, or outlook.",
-                        "peer_read_across": "Cross-company read-across comparing one company's filing/results against another holding's thesis (e.g. 'read-across from TSMC to NVIDIA', 'what does Microsoft capex mean for NVIDIA?').",
+                        "earnings_preview": "Pre-earnings setup, preview, or checklist BEFORE a print for ANY company (held or not held).",
+                        "brief_holding": "Post-earnings thesis review or earnings summary for ANY company (held or not held).",
+                        "follow_up_source": "Ask a specific factual follow-up question about one company's metric, driver, margin, or management comment.",
+                        "peer_read_across": "Cross-company read-across comparing one company's filing/results against another holding's thesis.",
                         "draft_next_check": "Explicitly dictate a watch item or question to check at the next earnings call or next quarter.",
                         "clarify": "The utterance is genuinely ambiguous and needs clarification.",
                     },
@@ -214,17 +172,19 @@ class JevRouter:
                 "holding": {
                     "type": "choice",
                     "instructions": (
-                        "Which target company is this utterance about? Pick a tracked ticker ONLY if the wearer "
-                        "explicitly named that tracked company. Pick 'untracked' if the wearer named a DIFFERENT "
-                        "company (e.g. Alphabet, Apple, Meta). Pick 'implicit_active' ONLY if no company was named."
+                        "Which PRIMARY target company is this utterance about? Pick an indexed ticker ONLY if "
+                        "the wearer explicitly asked about that indexed company as the target. Pick 'untracked' "
+                        "if the primary target is any other company (even if an indexed company is mentioned incidentally). "
+                        "Pick 'implicit_active' ONLY if no company was named."
                     ),
                     "criteria": ticker_criteria,
                 },
                 "peer_holding": {
                     "type": "choice",
                     "instructions": (
-                        "Only for cross-company peer read-across: which PEER/SOURCE ticker is being read from "
-                        "(e.g. in 'read-across from TSMC to NVIDIA', pick TSM)? Otherwise pick 'none'."
+                        "Only for cross-company peer read-across: which PEER/SOURCE company is being read from? "
+                        "Pick an indexed ticker if that peer is in the indexed watchlist, 'untracked' if the peer "
+                        "is outside the indexed watchlist, or 'none' if not a peer read-across."
                     ),
                     "criteria": peer_criteria,
                 },
@@ -232,8 +192,8 @@ class JevRouter:
                     "type": "noul",
                     "instructions": (
                         "Does this request need the System-2 LLM worker on screen right now (true for thesis review, "
-                        "source follow-up, peer read-across, or preview/review of an untracked company; false for "
-                        "fast logs, dictated checks, and tracked-holding pre-earnings previews)?"
+                        "source follow-up, peer read-across, or preview/review of a non-indexed company; false for "
+                        "fast logs, dictated checks, and indexed-holding pre-earnings previews)?"
                     ),
                 },
                 "needs_enrichment": {
@@ -263,42 +223,36 @@ class JevRouter:
         action = _parse_enum(ActionType, action_ans.get("choice"), ActionType.LOG_NOTE)
         raw_holding = str(holding_ans.get("choice", "none")).strip()
         raw_peer = str(peer_ans.get("choice", "none")).strip()
-        peer_holding = None if raw_peer.lower() == "none" else raw_peer.upper()
-
         worker_prob = _extract_noul_probability(worker_ans, 0.0)
         enrich_prob = _extract_noul_probability(enrich_ans, 0.0)
 
         holding: str | None = None
+        peer_holding: str | None = None
         requested_company: str | None = None
+        tracked_set = {t.upper() for t in available_tickers}
 
-        if mind != Mind.WORK:
-            holding = None
-            peer_holding = None
-            requested_company = None
-        else:
-            explicit_tracked = self._detect_explicit_tickers(transcript.lower(), available_tickers)
-            untracked_extracted = self.extract_requested_company(transcript, available_tickers)
-
-            if raw_holding.lower() == "untracked" or (untracked_extracted and not explicit_tracked):
-                # Never silently hijack an explicitly named non-watchlist company with active_ticker!
-                holding = None
-                requested_company = untracked_extracted or self._fallback_company_phrase(transcript)
-            elif raw_holding.lower() in ("implicit_active", "none"):
-                if explicit_tracked:
-                    holding = explicit_tracked[0]
-                elif active_ticker:
+        if mind == Mind.WORK:
+            if action == ActionType.PEER_READ_ACROSS:
+                if raw_holding.upper() in tracked_set:
+                    holding = raw_holding.upper()
+                elif raw_holding.lower() == "implicit_active" and active_ticker:
                     holding = active_ticker.upper()
-            else:
-                holding = raw_holding.upper()
 
-            if action != ActionType.PEER_READ_ACROSS:
-                peer_holding = None
-            elif peer_holding == holding:
-                if active_ticker and active_ticker.upper() != holding:
-                    peer_holding = holding
-                    holding = active_ticker.upper()
-                else:
+                if raw_peer.upper() in tracked_set:
+                    peer_holding = raw_peer.upper()
+
+                if raw_peer.lower() == "untracked" or raw_holding.lower() == "untracked":
+                    requested_company = transcript.strip()
+                if peer_holding and peer_holding == holding:
                     peer_holding = None
+            else:
+                if raw_holding.lower() == "untracked":
+                    holding = None
+                    requested_company = transcript.strip()
+                elif raw_holding.upper() in tracked_set:
+                    holding = raw_holding.upper()
+                elif raw_holding.lower() in ("implicit_active", "none") and active_ticker:
+                    holding = active_ticker.upper()
 
         is_adhoc_company = mind == Mind.WORK and holding is None and requested_company is not None
         no_llm_actions = (
@@ -309,11 +263,11 @@ class JevRouter:
         llm_actions = (
             ActionType.BRIEF_HOLDING,
             ActionType.FOLLOW_UP_SOURCE,
-            ActionType.PEER_READ_ACROSS,
         )
         if action == ActionType.EARNINGS_PREVIEW:
-            # Tracked holding preview is Tier-0 zero-LLM; untracked company preview uses web LLM worker.
             needs_worker = is_adhoc_company
+        elif action == ActionType.PEER_READ_ACROSS:
+            needs_worker = holding is not None and peer_holding is not None
         else:
             needs_worker = (
                 is_adhoc_company
@@ -435,96 +389,185 @@ class JevRouter:
         return data, elapsed_ms
 
     # ------------------------------------------------------------------
-    # Entity detection helpers & deterministic local fallback
+    # Compact offline simulator (COCKPIT_MOCK_MODE=true only)
     # ------------------------------------------------------------------
 
     @staticmethod
-    def _detect_explicit_tickers(lower: str, available_tickers: list[str]) -> list[str]:
-        """Returns explicitly mentioned tracked tickers ordered by first appearance in the utterance."""
-        hits: list[tuple[int, str]] = []
-        for ticker in available_tickers:
-            names = TRACKED_ALIASES.get(ticker.upper(), (ticker.lower(),))
-            positions = [
-                m.start()
-                for name in names
-                for m in re.finditer(rf"\b{re.escape(name)}\b", lower)
-            ]
-            if positions:
-                hits.append((min(positions), ticker.upper()))
-        hits.sort(key=lambda item: item[0])
-        return [ticker for _, ticker in hits]
+    def _mock_tracked_terms(
+        available_tickers: list[str],
+        available_holdings: dict[str, str] | None,
+    ) -> dict[str, tuple[str, ...]]:
+        """Derives searchable terms for indexed holdings directly from SQLite/CSV metadata."""
+        holdings_map = available_holdings or {}
+        terms: dict[str, tuple[str, ...]] = {}
+        for t in available_tickers:
+            t_up = t.upper()
+            candidates: list[str] = [t_up.lower()]
+            company = holdings_map.get(t_up) or (
+                PORTFOLIO_BY_TICKER[t_up].company if t_up in PORTFOLIO_BY_TICKER else ""
+            )
+            if company:
+                # Strip weight suffix like "(29.2%)" and legal words to grab the company root
+                clean = re.sub(r"\([^)]*\)", " ", company)
+                clean = re.sub(r"\.com\b", "", clean, flags=re.IGNORECASE)
+                clean = re.sub(
+                    r"\b(inc|incorporated|corp|corporation|holdings|plc|ltd|limited|technology|technologies)\b\.?",
+                    " ",
+                    clean,
+                    flags=re.IGNORECASE,
+                )
+                clean = re.sub(r"[^A-Za-z0-9 ]+", " ", clean)
+                clean = re.sub(r"\s+", " ", clean).strip().lower()
+                if clean:
+                    candidates.append(clean)
+                    first_word = clean.split()[0]
+                    if len(first_word) >= 4:
+                        candidates.append(first_word)
+            for hint, hint_ticker in _MOCK_PRODUCT_HINTS.items():
+                if hint_ticker == t_up:
+                    candidates.append(hint)
+            terms[t_up] = tuple(dict.fromkeys(candidates))
+        return terms
 
     @classmethod
-    def extract_requested_company(cls, transcript: str, available_tickers: list[str]) -> str | None:
-        """
-        Detects an explicitly named non-watchlist company (e.g. 'Alphabet', 'Apple', 'ASML')
-        so requests like 'Can you please preview Alphabet earnings?' NEVER default to NVDA.
-        """
-        lower = transcript.lower()
-        tracked_names: set[str] = set()
-        for t in available_tickers:
-            tracked_names.add(t.lower())
-            tracked_names.update(TRACKED_ALIASES.get(t.upper(), ()))
+    def _mock_find_tracked_in_clause(
+        cls,
+        clause: str,
+        tracked_terms: dict[str, tuple[str, ...]],
+    ) -> list[tuple[int, str]]:
+        lower = clause.lower()
+        hits: list[tuple[int, str]] = []
+        for ticker, words in tracked_terms.items():
+            starts = [m.start() for w in words for m in re.finditer(rf"\b{re.escape(w)}\b", lower)]
+            if starts:
+                hits.append((min(starts), ticker))
+        hits.sort(key=lambda item: item[0])
+        return hits
 
-        # 1. Known untracked public/private companies (ordered by earliest mention)
-        known_hits: list[tuple[int, str]] = []
-        for alias, display in KNOWN_UNTRACKED_COMPANIES.items():
-            if alias in tracked_names:
-                continue
-            m = re.search(rf"\b{re.escape(alias)}\b", lower)
-            if m:
-                known_hits.append((m.start(), display))
-        if known_hits:
-            known_hits.sort(key=lambda item: item[0])
-            return known_hits[0][1]
+    @classmethod
+    def _mock_resolve_clause(
+        cls,
+        clause: str,
+        available_tickers: list[str],
+        tracked_terms: dict[str, tuple[str, ...]],
+    ) -> tuple[str | None, str | None]:
+        """Returns (tracked_ticker, untracked_company_label) for a single clause in offline mock mode."""
+        tracked_hits = cls._mock_find_tracked_in_clause(clause, tracked_terms)
+        if tracked_hits:
+            return tracked_hits[0][1], None
 
-        # 2. Pattern extraction around 'preview/review <Company> earnings' or '<Company> earnings'
-        patterns = (
-            r"\b(?:preview|review|brief|check)\s+(?:on\s+|for\s+)?([A-Za-z0-9&.\- ]{2,32}?)\s+(?:before\s+)?(?:earnings|results|quarter|print)\b",
-            r"\b([A-Z][A-Za-z0-9&.\-]*(?:\s+[A-Z][A-Za-z0-9&.\-]*)?)\s+(?:earnings|results|quarter|print)\b",
-            r"\b(?:preview|review)\s+(?:earnings\s+(?:for|of|on)\s+)([A-Za-z0-9&.\- ]{2,32})",
-        )
-        for pat in patterns:
-            m = re.search(pat, transcript, flags=re.IGNORECASE if pat.startswith(r"\b(?:preview") else 0)
-            if not m:
-                continue
-            candidate = m.group(1).strip(" ?.,!'\"")
-            words = [w for w in candidate.split() if w.lower() not in _STOP_COMPANY_WORDS]
-            if not words:
-                continue
-            cleaned = " ".join(words)
-            if cleaned.lower() in tracked_names:
-                return None
-            if any(w.lower() in tracked_names for w in words):
-                return None
-            return cleaned
+        excluded = {t.upper() for t in available_tickers}
+        pos = match_portfolio_position_in_text(clause, exclude_tickers=excluded)
+        if pos is not None:
+            return None, pos.display_name
 
-        return None
-
-    @staticmethod
-    def _fallback_company_phrase(transcript: str) -> str:
+        # Fallback: extract non-filler company phrase (e.g. 'Apple', 'Alphabet', 'TSMC')
         words = [
             w.strip("?.,!'\"")
-            for w in transcript.split()
-            if w.strip("?.,!'\"") and w.strip("?.,!'\" ").lower() not in _STOP_COMPANY_WORDS
+            for w in clause.split()
+            if w.strip("?.,!'\"") and w.strip("?.,!'\" ").lower() not in _MOCK_FILLER_WORDS
         ]
-        return " ".join(words[:4]) or transcript.strip()[:40]
+        if 1 <= len(words) <= 3:
+            return None, " ".join(words)
+        return None, None
 
     @classmethod
-    def _detect_explicit_ticker(cls, lower: str, available_tickers: list[str]) -> str | None:
-        found = cls._detect_explicit_tickers(lower, available_tickers)
-        return found[0] if found else None
+    def _mock_resolve_target(
+        cls,
+        transcript: str,
+        available_tickers: list[str],
+        tracked_terms: dict[str, tuple[str, ...]],
+    ) -> tuple[str | None, str | None]:
+        # Prioritize target clause before any incidental comparison ('compared with X', 'vs X')
+        target_m = re.search(
+            r"\b(?:preview|review|brief|check)\s+(?:on\s+|for\s+)?([^,.;?!]+?)"
+            r"(?:\s+(?:compared\s+(?:with|to)|versus|vs\.?|against)\b|$)",
+            transcript,
+            flags=re.IGNORECASE,
+        )
+        if target_m:
+            tracked, untracked = cls._mock_resolve_clause(
+                target_m.group(1),
+                available_tickers,
+                tracked_terms,
+            )
+            if tracked or untracked:
+                return tracked, untracked
+
+        # Otherwise check tracked holdings, then CSV portfolio, then '<Company> earnings'
+        tracked_hits = cls._mock_find_tracked_in_clause(transcript, tracked_terms)
+        if tracked_hits:
+            return tracked_hits[0][1], None
+
+        pos = match_portfolio_position_in_text(
+            transcript,
+            exclude_tickers={t.upper() for t in available_tickers},
+        )
+        if pos is not None:
+            return None, pos.display_name
+
+        m_earn = re.search(
+            r"\b([A-Z][A-Za-z0-9&.\-]*(?:\s+[A-Z][A-Za-z0-9&.\-]*)?)\s+(?:earnings|results|quarter|print)\b",
+            transcript,
+        )
+        if m_earn:
+            cleaned = " ".join(
+                w for w in m_earn.group(1).split() if w.lower() not in _MOCK_FILLER_WORDS
+            )
+            if cleaned:
+                return None, cleaned
+        return None, None
+
+    @classmethod
+    def _mock_resolve_peer(
+        cls,
+        transcript: str,
+        available_tickers: list[str],
+        tracked_terms: dict[str, tuple[str, ...]],
+        active_ticker: str | None,
+    ) -> tuple[str | None, str | None, str | None]:
+        """Returns (target_ticker, peer_ticker, unsupported_label) for offline mock peer read-across."""
+        peer_clause: str | None = None
+        target_clause: str | None = None
+
+        m_from_to = re.search(r"\bfrom\s+([^,.;?!]+?)\s+(?:to|for|on)\s+([^,.;?!]+)", transcript, re.I)
+        m_to_from = re.search(r"\b(?:to|for)\s+([^,.;?!]+?)\s+from\s+([^,.;?!]+)", transcript, re.I)
+        m_mean = re.search(r"([^,.;?!]+?)\s+mean(?:s)?\s+for\s+([^,.;?!]+)", transcript, re.I)
+
+        if m_from_to:
+            peer_clause, target_clause = m_from_to.group(1), m_from_to.group(2)
+        elif m_to_from:
+            target_clause, peer_clause = m_to_from.group(1), m_to_from.group(2)
+        elif m_mean:
+            peer_clause, target_clause = m_mean.group(1), m_mean.group(2)
+
+        if peer_clause is not None and target_clause is not None:
+            p_tracked, p_untracked = cls._mock_resolve_clause(peer_clause, available_tickers, tracked_terms)
+            t_tracked, t_untracked = cls._mock_resolve_clause(target_clause, available_tickers, tracked_terms)
+            target_t = t_tracked if (t_tracked or t_untracked) else (active_ticker.upper() if active_ticker else None)
+            peer_t = p_tracked if p_tracked != target_t else None
+            unsupported = p_untracked or t_untracked
+            return target_t, peer_t, unsupported
+
+        # No directional preposition: use distinct tracked holdings in order
+        hits = cls._mock_find_tracked_in_clause(transcript, tracked_terms)
+        tickers_seen = [t for _, t in hits]
+        if len(tickers_seen) >= 2:
+            return tickers_seen[1], tickers_seen[0], None
+        if len(tickers_seen) == 1 and active_ticker and tickers_seen[0] != active_ticker.upper():
+            return active_ticker.upper(), tickers_seen[0], None
+        return (tickers_seen[0] if tickers_seen else (active_ticker.upper() if active_ticker else None)), None, None
 
     def _mock_route_utterance(
         self,
         transcript: str,
         *,
         available_tickers: list[str],
+        available_holdings: dict[str, str] | None,
         active_ticker: str | None,
     ) -> JevDecision:
         lower = transcript.lower().strip()
 
-        # Check fast-path Personal tasks first ("remember to buy a birthday present")
         if any(kw in lower for kw in ("remember to", "remind me", "buy ", "birthday", "present", "groceries", "call mom")):
             return JevDecision(
                 mind=Mind.PERSONAL,
@@ -537,7 +580,6 @@ class JevRouter:
                 reasoning="Fast-path personal task detected (no LLM worker).",
             )
 
-        # Check fast-path Interests notes ("this podcast was great")
         if any(kw in lower for kw in ("podcast", "book ", "article", "film", "movie", "episode", "great listen")):
             return JevDecision(
                 mind=Mind.INTERESTS,
@@ -550,36 +592,38 @@ class JevRouter:
                 reasoning="Fast-path interests note detected (no LLM worker).",
             )
 
-        explicit_tickers = self._detect_explicit_tickers(lower, available_tickers)
-        explicit_ticker = explicit_tickers[0] if explicit_tickers else None
-        untracked_company = None if explicit_ticker else self.extract_requested_company(transcript, available_tickers)
+        tracked_terms = self._mock_tracked_terms(available_tickers, available_holdings)
+
+        if any(kw in lower for kw in ("read-across", "read across", "peer read", "cross-read", "cross read", "mean for")):
+            target_t, peer_t, unsupported = self._mock_resolve_peer(
+                transcript, available_tickers, tracked_terms, active_ticker
+            )
+            can_synthesize = target_t is not None and peer_t is not None
+            return JevDecision(
+                mind=Mind.WORK,
+                action=ActionType.PEER_READ_ACROSS,
+                holding=target_t,
+                peer_holding=peer_t,
+                requested_company=unsupported,
+                needs_llm_worker=can_synthesize,
+                confidence=0.95,
+                mode="mock",
+                reasoning=(
+                    f"Work peer_read_across skill ({peer_t} -> {target_t}) routes to System-2 synthesis."
+                    if can_synthesize
+                    else f"Peer read-across needs clarification (unsupported={unsupported or 'missing'}, target={target_t})."
+                ),
+            )
+
+        explicit_ticker, untracked_company = self._mock_resolve_target(
+            transcript, available_tickers, tracked_terms
+        )
         resolved_ticker = (
             None
             if untracked_company
             else (explicit_ticker or (active_ticker.upper() if active_ticker else None))
         )
 
-        # Peer read-across ("read-across from TSMC to NVIDIA", "what does Microsoft mean for NVIDIA")
-        if any(kw in lower for kw in ("read-across", "read across", "peer read", "cross-read", "cross read", "mean for")):
-            if len(explicit_tickers) >= 2:
-                peer_t, target_t = explicit_tickers[0], explicit_tickers[1]
-            elif len(explicit_tickers) == 1 and active_ticker and explicit_tickers[0] != active_ticker.upper():
-                peer_t, target_t = explicit_tickers[0], active_ticker.upper()
-            else:
-                peer_t = explicit_ticker
-                target_t = active_ticker.upper() if active_ticker else (available_tickers[0] if available_tickers else None)
-            return JevDecision(
-                mind=Mind.WORK,
-                action=ActionType.PEER_READ_ACROSS,
-                holding=target_t,
-                peer_holding=peer_t,
-                needs_llm_worker=True,
-                confidence=0.95,
-                mode="mock",
-                reasoning=f"Work peer_read_across skill ({peer_t} -> {target_t}) routes to System-2 synthesis.",
-            )
-
-        # Pre-earnings preview (Tier 0 zero-LLM for tracked holdings; web worker for non-watchlist companies)
         if any(kw in lower for kw in ("preview", "before earnings", "pre-call", "pre call", "what am i watching", "baseline")):
             is_untracked = untracked_company is not None
             return JevDecision(
@@ -597,7 +641,6 @@ class JevRouter:
                 ),
             )
 
-        # Next-quarter check dictation ("At the next call, check whether those price increases are on schedule")
         if any(kw in lower for kw in ("next call", "next quarter", "check whether", "track whether", "save check", "watch item")):
             return JevDecision(
                 mind=Mind.WORK,
@@ -610,8 +653,13 @@ class JevRouter:
                 reasoning="Work next-quarter check staged for 1-tap journal confirmation.",
             )
 
-        # Deep source follow-up ("What did management expect to bring margins back up?")
-        if any(kw in lower for kw in ("bring margins", "margins back", "price increase", "why did", "what did management", "how did", "follow up")):
+        if any(
+            kw in lower
+            for kw in (
+                "what drove", "asp", "cash flow", "moldx", "reimbursement",
+                "why did", "what did management", "how did", "follow up",
+            )
+        ):
             return JevDecision(
                 mind=Mind.WORK,
                 action=ActionType.FOLLOW_UP_SOURCE,
@@ -623,7 +671,6 @@ class JevRouter:
                 reasoning="Work follow-up question requires source retrieval + worker.",
             )
 
-        # Earnings / holdings review ("Can we review NVIDIA earnings?", "Review Alphabet earnings", "What changed?")
         if (
             any(kw in lower for kw in ("earning", "review", "what changed", "holding", "guidance", "margin", "revenue"))
             or explicit_ticker is not None
@@ -675,12 +722,19 @@ class JevRouter:
                 continue
 
             bonus = 0.0
-            if "revenue" in q_tokens and "revenue" in chunk.topic.lower():
+            topic_l = chunk.topic.lower()
+            if ("volume" in q_tokens or "oncology" in q_tokens or "guidance" in q_tokens) and "volume" in topic_l:
                 bonus += 4.0
-            if ("back" in q_tokens or "recover" in q_tokens or "price" in q_tokens) and "recovery" in chunk.topic.lower():
+            if ("asp" in q_tokens or "cash" in q_tokens or "moldx" in q_tokens or "reimbursement" in q_tokens) and "asp" in topic_l:
                 bonus += 4.0
-            if ("trough" in q_tokens or "deeper" in q_tokens) and "trough" in chunk.topic.lower():
+            if ("true" in q_tokens or "ups" in q_tokens or "underlying" in q_tokens or "cogs" in q_tokens) and "true-ups" in topic_l:
                 bonus += 4.0
+            if ("hamr" in q_tokens or "mozaic" in q_tokens or "azure" in q_tokens or "exabytes" in q_tokens) and "mozaic" in topic_l:
+                bonus += 4.0
+            if ("capex" in q_tokens or "storage" in q_tokens or "infrastructure" in q_tokens) and "capex" in topic_l:
+                bonus += 4.0
+            if ("aws" in q_tokens or "growth" in q_tokens or "operating" in q_tokens) and "operating" in topic_l:
+                bonus += 3.0
             score = overlap + bonus
             if score > best_score:
                 best_score = score

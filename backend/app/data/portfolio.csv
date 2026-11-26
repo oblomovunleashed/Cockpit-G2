@@ -1,0 +1,62 @@
+ticker,company,weight_pct
+NTRA,"Natera, Inc.",29.22
+STX,"Seagate Technology Holdings plc",9.07
+AMZN,"Amazon.com, Inc.",6.86
+FOXA,"Fox Corporation — Class A",4.27
+INSM,"Insmed Incorporated",4.19
+YPF,"YPF S.A.",3.97
+U,"Unity Software Inc.",3.62
+SE,"Sea Limited",3.47
+EWZ,"iShares MSCI Brazil ETF",2.81
+CDW,"CDW Corporation",2.37
+RVMD,"Revolution Medicines, Inc.",2.00
+TBBB,"BBB Foods Inc.",1.94
+STM,"STMicroelectronics N.V.",1.93
+NAMS,"NewAmsterdam Pharma Company N.V.",1.83
+SGI,"Somnigroup International Inc.",1.38
+NEM,"Newmont Corporation",0.98
+B,"Barrick Mining Corporation",0.96
+AEM,"Agnico Eagle Mines Limited",0.95
+BTDR,"Bitdeer Technologies Group",0.89
+CPNG,"Coupang, Inc.",0.83
+WDC,"Western Digital Corporation",0.82
+PURR,"Hyperliquid Strategies Inc.",0.81
+FOX,"Fox Corporation — Class B",0.80
+FLR,"Fluor Corporation",0.77
+SKY,"Champion Homes, Inc.",0.71
+APP,"AppLovin Corporation",0.71
+CVCO,"Cavco Industries, Inc.",0.71
+DAKT,"Daktronics, Inc.",0.70
+SPCX,"Space Exploration Technologies Corp. — SpaceX",0.68
+ROKU,"Roku, Inc.",0.63
+TTMI,"TTM Technologies, Inc.",0.61
+RYTM,"Rhythm Pharmaceuticals, Inc.",0.57
+HUM,"Humana Inc.",0.56
+TSLA,"Tesla, Inc. — calls only",0.50
+ADMA,"ADMA Biologics, Inc.",0.50
+RIOT,"Riot Platforms, Inc.",0.41
+BLTE,"Belite Bio, Inc.",0.40
+BEAM,"Beam Therapeutics Inc.",0.38
+JBS,"JBS N.V.",0.36
+RSP,"Invesco S&P 500 Equal Weight ETF",0.35
+RLAY,"Relay Therapeutics, Inc.",0.34
+PLTR,"Palantir Technologies Inc.",0.34
+TSM,"Taiwan Semiconductor Manufacturing Company Limited",0.33
+RGEN,"Repligen Corporation",0.33
+SNX,"TD SYNNEX Corporation",0.32
+CRH,"CRH plc",0.30
+NUVB,"Nuvation Bio Inc.",0.28
+PANW,"Palo Alto Networks, Inc.",0.27
+PCT,"PureCycle Technologies, Inc.",0.26
+NSIT,"Insight Enterprises, Inc.",0.23
+SKE,"Skeena Resources Limited",0.20
+KRSA,"Korsana Biosciences, Inc.",0.20
+OLMA,"Olema Pharmaceuticals, Inc.",0.19
+MKSI,"MKS Inc.",0.19
+RKT,"Rocket Companies, Inc.",0.17
+COGT,"Cogent Biosciences, Inc.",0.16
+MLTX,"MoonLake Immunotherapeutics",0.13
+LLY,"Eli Lilly and Company",0.10
+AUR,"Aurora Innovation, Inc.",0.08
+DBVT,"DBV Technologies S.A.",0.05
+WVE,"Wave Life Sciences, Inc.",0.01

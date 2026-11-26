@@ -164,13 +164,13 @@ test('non-gesture sysEvents and empty envelopes do not trigger phantom taps', ()
 });
 
 test('follow-up tap previews exact proposed draft on glasses before confirming save', async () => {
-  const proposedText = 'At next call, check whether Q1 FY28 price increases are on schedule';
+  const proposedText = 'At Q4 call, check whether ex-true-up gross margin stays above 63%';
   const state = makeState({
     mode: 'RESULT',
     suggestedCheck: {
-      ticker: 'NVDA',
+      ticker: 'NTRA',
       content: proposedText,
-      source_citation: 'Aug FY27 Call · p. 7',
+      source_citation: 'Q3 2026 PR · Nov 5',
     },
   });
 
@@ -191,7 +191,7 @@ test('follow-up tap previews exact proposed draft on glasses before confirming s
         updates_next_check: true,
       },
       hud: {
-        header: 'WORK · NVDA · CONFIRM CHECK',
+        header: 'WORK · NTRA · CONFIRM CHECK',
         body: draft.content,
         footer: 'Tap: save to journal · Swipe: cancel',
       },
@@ -207,8 +207,8 @@ test('follow-up tap previews exact proposed draft on glasses before confirming s
           mind: 'work',
           kind: 'check',
           content: proposedText,
-          ticker: 'NVDA',
-          source_citation: 'Aug FY27 Call · p. 7',
+          ticker: 'NTRA',
+          source_citation: 'Q3 2026 PR · Nov 5',
           notion_page_id: null,
           created_at: '2026-11-24T14:31:00Z',
         },
@@ -231,7 +231,7 @@ test('follow-up tap previews exact proposed draft on glasses before confirming s
   await executeTapAction(state, deps);
   assert.equal(confirmCalls, 0);
   assert.equal(state.mode, 'CONFIRM_WRITE');
-  assert.equal(renderedCards[0]?.header, 'WORK · NVDA · CONFIRM CHECK');
+  assert.equal(renderedCards[0]?.header, 'WORK · NTRA · CONFIRM CHECK');
   assert.equal(renderedCards[0]?.body, proposedText);
 
   // Second tap confirms and saves after wearer has seen the wording
@@ -245,8 +245,8 @@ test('tapping a holding with no matching passage does not stage or save a check'
     mode: 'BRIEFING',
     holdings: [
       {
-        ticker: 'NVDA',
-        company: 'NVIDIA Corp.',
+        ticker: 'NTRA',
+        company: 'Natera, Inc.',
         saved_question: 'Warranty reserves?',
         verdict: null,
         latest_finding: 'No matching passage in indexed filings for this question.',
@@ -287,13 +287,13 @@ test('tapping a holding with no matching passage does not stage or save a check'
 
 test('tapping a no-match follow-up card does not fall through to the holding old suggested check', async () => {
   const holdingWithCheck = {
-    ticker: 'NVDA',
-    company: 'NVIDIA Corp.',
-    saved_question: 'Does NVIDIA expect the margin trough to get deeper?',
+    ticker: 'NTRA',
+    company: 'Natera, Inc.',
+    saved_question: 'Is Natera sustaining 63%+ ex-true-up gross margin as Signatera scales?',
     verdict: 'HELD' as const,
-    latest_finding: 'Q4 FY27 gross margin guide · 71-72%.',
-    source_citation: 'Q3 FY27 PR · Nov 17',
-    suggested_next_check: 'Check whether Q1 FY28 price increases are on schedule',
+    latest_finding: 'Q3 GAAP GM 64.7%; ex-true-up non-GAAP GM 63.2% (+140 bps QoQ).',
+    source_citation: 'Q3 2026 PR · Nov 5',
+    suggested_next_check: 'Check whether ex-true-up gross margin stays above 63% as Signatera scales',
     next_check: '',
     notion_page_id: null,
     updated_at: '2026-11-24T14:35:00Z',
@@ -304,7 +304,7 @@ test('tapping a no-match follow-up card does not fall through to the holding old
     decision: {
       mind: 'work',
       action: 'follow_up_source',
-      holding: 'NVDA',
+      holding: 'NTRA',
       peer_holding: null,
       needs_llm_worker: true,
       confidence: 0.93,
@@ -312,7 +312,7 @@ test('tapping a no-match follow-up card does not fall through to the holding old
       reasoning: 'Work follow-up question requires source retrieval + worker.',
     },
     hud: {
-      header: 'WORK · NVDA · NO MATCH',
+      header: 'WORK · NTRA · NO MATCH',
       body: 'No matching passage in indexed filings for this question.',
       footer: 'Hold: ask again or dictate check',
     },
@@ -346,12 +346,12 @@ test('tapping a no-match follow-up card does not fall through to the holding old
           mind: 'work',
           kind: 'check',
           content: holdingWithCheck.suggested_next_check,
-          ticker: 'NVDA',
+          ticker: 'NTRA',
           source_citation: holdingWithCheck.source_citation,
           updates_next_check: true,
         },
         hud: {
-          header: 'WORK · NVDA · CONFIRM CHECK',
+          header: 'WORK · NTRA · CONFIRM CHECK',
           body: holdingWithCheck.suggested_next_check,
           footer: 'Tap: save to journal · Swipe: cancel',
         },
@@ -380,11 +380,11 @@ test('tapping a no-match follow-up card does not fall through to the holding old
 
 test('earnings_preview stays in RESULT (no tap fallback) while peer_read_across previews draft check first', async () => {
   const previewRes: UtteranceResponse = {
-    transcript: 'Preview NVIDIA before earnings',
+    transcript: 'Preview Natera before earnings',
     decision: {
       mind: 'work',
       action: 'earnings_preview',
-      holding: 'NVDA',
+      holding: 'NTRA',
       peer_holding: null,
       needs_llm_worker: false,
       confidence: 0.95,
@@ -392,8 +392,8 @@ test('earnings_preview stays in RESULT (no tap fallback) while peer_read_across 
       reasoning: 'Deterministic earnings_preview skill (zero LLM).',
     },
     hud: {
-      header: 'PREVIEW · NVDA · PRE-CALL',
-      body: 'Q: Does NVIDIA expect the margin trough to get deeper?',
+      header: 'PREVIEW · NTRA · PRE-CALL',
+      body: 'Q: Is Natera sustaining 63%+ ex-true-up gross margin as Signatera scales?',
       footer: 'Hold: update check · Swipe: holdings',
     },
     holding: null,
@@ -403,28 +403,28 @@ test('earnings_preview stays in RESULT (no tap fallback) while peer_read_across 
   assert.equal(nextViewModeFromUtterance(previewRes), 'RESULT');
 
   const peerRes: UtteranceResponse = {
-    transcript: "What's the read-across from TSMC to NVIDIA?",
+    transcript: "What's the read-across from Amazon to Seagate?",
     decision: {
       mind: 'work',
       action: 'peer_read_across',
-      holding: 'NVDA',
-      peer_holding: 'TSM',
+      holding: 'STX',
+      peer_holding: 'AMZN',
       needs_llm_worker: true,
       confidence: 0.95,
       mode: 'mock',
-      reasoning: 'Peer read-across TSM -> NVDA',
+      reasoning: 'Peer read-across AMZN -> STX',
     },
     hud: {
-      header: 'PEER · TSM → NVDA',
-      body: 'TSMC Q4 guide $52.3-54.3bn & maxed CoWoS support NVDA demand.',
+      header: 'PEER · AMZN → STX',
+      body: 'Amazon ~$220B companywide FY26 cash capex supports Seagate nearline HAMR demand.',
       footer: 'Tap: review check · Hold: dictate',
     },
     holding: null,
     pending_write: null,
     suggested_check: {
-      ticker: 'NVDA',
-      content: 'Check on NVDA call whether TSMC CoWoS tightness affects margins',
-      source_citation: 'Peer read: TSMC Q3 2026 Call · Oct 15',
+      ticker: 'STX',
+      content: 'Check on STX call whether Amazon AWS capex extends 2028 HAMR allocations',
+      source_citation: 'Peer read: AMZN Q3 2026 Release · Oct 29',
     },
   };
   assert.equal(nextViewModeFromUtterance(peerRes), 'RESULT');
@@ -452,7 +452,7 @@ test('earnings_preview stays in RESULT (no tap fallback) while peer_read_across 
           updates_next_check: true,
         },
         hud: {
-          header: 'WORK · NVDA · CONFIRM CHECK',
+          header: 'WORK · STX · CONFIRM CHECK',
           body: draft.content,
           footer: 'Tap: save to journal · Swipe: cancel',
         },
@@ -471,7 +471,7 @@ test('earnings_preview stays in RESULT (no tap fallback) while peer_read_across 
 
   assert.equal(confirmCalls, 0);
   assert.deepEqual(stagedBodies, [
-    'Check on NVDA call whether TSMC CoWoS tightness affects margins',
+    'Check on STX call whether Amazon AWS capex extends 2028 HAMR allocations',
   ]);
   assert.equal(state.mode, 'CONFIRM_WRITE');
 });
@@ -524,13 +524,13 @@ test('releasing mic button while getUserMedia permission is pending cancels capt
 });
 
 test('swipe on CONFIRM_WRITE reclassifies destination in place without re-speaking', async () => {
-  const nvda = {
-    ticker: 'NVDA',
-    company: 'NVIDIA Corp.',
-    saved_question: 'Does NVIDIA expect the margin trough to get deeper?',
+  const ntra = {
+    ticker: 'NTRA',
+    company: 'Natera, Inc.',
+    saved_question: 'Is Natera sustaining 63%+ ex-true-up gross margin as Signatera scales?',
     verdict: 'HELD' as const,
-    latest_finding: 'Q4 FY27 gross margin guide 71-72%.',
-    source_citation: 'Q3 FY27 PR',
+    latest_finding: 'Q3 GAAP GM 64.7%; ex-true-up non-GAAP GM 63.2% (+140 bps QoQ).',
+    source_citation: 'Q3 2026 PR',
     suggested_next_check: '',
     next_check: '',
     notion_page_id: null,
@@ -538,7 +538,7 @@ test('swipe on CONFIRM_WRITE reclassifies destination in place without re-speaki
   };
   const state = makeState({
     mode: 'CONFIRM_WRITE',
-    holdings: [nvda],
+    holdings: [ntra],
     pendingWrite: {
       id: 'p-reclass',
       mind: 'interests',
@@ -590,24 +590,24 @@ test('swipe on CONFIRM_WRITE reclassifies destination in place without re-speaki
   assert.equal(state.pendingWrite?.kind, 'task');
   assert.equal(cards.at(-1)?.header, 'PERSONAL · CONFIRM TASK');
 
-  // Swipe 2: Personal -> Work Check (attaches active ticker NVDA)
+  // Swipe 2: Personal -> Work Check (attaches active ticker NTRA)
   await executeSwipeAction(state, 1, deps);
   assert.equal(state.pendingWrite?.mind, 'work');
-  assert.equal(state.pendingWrite?.ticker, 'NVDA');
+  assert.equal(state.pendingWrite?.ticker, 'NTRA');
   assert.deepEqual(calls, [
     { mind: 'personal', kind: 'task', ticker: null },
-    { mind: 'work', kind: 'check', ticker: 'NVDA' },
+    { mind: 'work', kind: 'check', ticker: 'NTRA' },
   ]);
 });
 
 test('SAVED receipt stays until tap (returns to deck) or swipe (undoes entry)', async () => {
-  const nvda = {
-    ticker: 'NVDA',
-    company: 'NVIDIA Corp.',
-    saved_question: 'Does NVIDIA expect the margin trough to get deeper?',
+  const ntra = {
+    ticker: 'NTRA',
+    company: 'Natera, Inc.',
+    saved_question: 'Is Natera sustaining 63%+ ex-true-up gross margin as Signatera scales?',
     verdict: 'HELD' as const,
-    latest_finding: 'Q4 FY27 gross margin guide 71-72%.',
-    source_citation: 'Q3 FY27 PR',
+    latest_finding: 'Q3 GAAP GM 64.7%; ex-true-up non-GAAP GM 63.2% (+140 bps QoQ).',
+    source_citation: 'Q3 2026 PR',
     suggested_next_check: '',
     next_check: '',
     notion_page_id: null,
@@ -617,7 +617,7 @@ test('SAVED receipt stays until tap (returns to deck) or swipe (undoes entry)', 
   // Case A: Tap on SAVED cleanly dismisses back to BRIEFING deck
   const stateTap = makeState({
     mode: 'SAVED',
-    holdings: [nvda],
+    holdings: [ntra],
     lastSavedEntry: {
       id: 7,
       mind: 'interests',
@@ -649,12 +649,12 @@ test('SAVED receipt stays until tap (returns to deck) or swipe (undoes entry)', 
   });
   assert.equal(stateTap.mode, 'BRIEFING');
   assert.equal(stateTap.lastSavedEntry, null);
-  assert.match(tapCards.at(-1)?.header ?? '', /NVDA/);
+  assert.match(tapCards.at(-1)?.header ?? '', /NTRA/);
 
   // Case B: Swipe on SAVED triggers Undo
   const stateUndo = makeState({
     mode: 'SAVED',
-    holdings: [nvda],
+    holdings: [ntra],
     lastSavedEntry: {
       id: 8,
       mind: 'personal',
@@ -730,11 +730,11 @@ test('PcmAudioRecorder cancels cleanly if stopped while bridge audioControl is p
 });
 
 test('sanitizeLine replaces unsupported LVGL firmware glyphs cleanly', () => {
-  const out = sanitizeLine('✓ PEER · TSM → NVDA ● …', 58);
+  const out = sanitizeLine('✓ PEER · AMZN → STX ● …', 58);
   assert.equal(out.includes('\u2713'), false);
   assert.equal(out.includes('\u2192'), false);
   assert.equal(out.includes('\u25CF'), false);
-  assert.equal(out, 'OK: PEER | TSM -> NVDA [REC] ...');
+  assert.equal(out, 'OK: PEER | AMZN -> STX [REC] ...');
 });
 
 test('releasing mic while showCard is awaiting cancels capture before audioControl opens', async () => {
@@ -756,13 +756,13 @@ test('releasing mic while showCard is awaiting cancels capture before audioContr
     mode: 'BRIEFING',
     holdings: [
       {
-        ticker: 'NVDA',
-        company: 'NVIDIA Corp.',
-        saved_question: 'Does NVIDIA expect the margin trough to get deeper?',
+        ticker: 'NTRA',
+        company: 'Natera, Inc.',
+        saved_question: 'Is Natera sustaining 63%+ ex-true-up gross margin as Signatera scales?',
         verdict: 'HELD',
-        latest_finding: 'Q4 FY27 gross margin guide 71-72%.',
-        source_citation: 'Q3 FY27 PR',
-        suggested_next_check: 'Check price hikes',
+        latest_finding: 'Q3 GAAP GM 64.7%; ex-true-up non-GAAP GM 63.2% (+140 bps QoQ).',
+        source_citation: 'Q3 2026 PR',
+        suggested_next_check: 'Check ex-true-up GM',
         next_check: '',
         notion_page_id: null,
         updated_at: '2026-11-25T00:00:00Z',
@@ -827,27 +827,27 @@ test('releasing mic while showCard is awaiting cancels capture before audioContr
   assert.equal(labelActive, false);
   assert.equal(audioReadyCalls, 0);
   assert.equal(state.mode, 'BRIEFING');
-  assert.match(renderedCards.at(-1)?.header ?? '', /NVDA/);
+  assert.match(renderedCards.at(-1)?.header ?? '', /NTRA/);
 });
 
 test('Pull Notion while CONFIRM card is open clears and cancels pending write before deck taps', async () => {
-  const nvda = {
-    ticker: 'NVDA',
-    company: 'NVIDIA Corp.',
-    saved_question: "Is revenue running ahead of management's guidance?",
+  const ntra = {
+    ticker: 'NTRA',
+    company: 'Natera, Inc.',
+    saved_question: "Is Natera oncology volume & FY26 revenue guide running ahead of expectations?",
     verdict: 'AHEAD' as const,
-    latest_finding: 'Q3 FY27 revenue $115.8bn (+7% vs $108bn guide).',
-    source_citation: 'Q3 FY27 PR',
-    suggested_next_check: 'Track Blackwell rack shipments',
+    latest_finding: 'Q3 rev $794.0M (+34.1% YoY); FY26 guide raised $140M to $3.005B-$3.035B.',
+    source_citation: 'Q3 2026 PR',
+    suggested_next_check: 'Track Q4 Signatera oncology volume growth',
     next_check: '',
-    notion_page_id: 'page-nvda',
+    notion_page_id: 'page-ntra',
     updated_at: '2026-11-25T12:00:00Z',
   };
 
   // Case 1: Pull Notion with recomputed banner -> dismiss -> tap deck must NOT confirm old pending write
   const state = makeState({
     mode: 'CONFIRM_WRITE',
-    holdings: [nvda],
+    holdings: [ntra],
     pendingWrite: {
       id: 'pending-stale-1',
       mind: 'interests',
@@ -866,7 +866,7 @@ test('Pull Notion while CONFIRM card is open clears and cancels pending write be
     cancelWrite: async (id) => {
       cancelledIds.push(id);
     },
-    pullNotion: async () => ({ pulled_count: 3, recomputed: ['NVDA'] }),
+    pullNotion: async () => ({ pulled_count: 3, recomputed: ['NTRA'] }),
     refreshDeckAfterPull: async () => {},
     showCard: async (card) => {
       rendered.push(card);
@@ -898,14 +898,14 @@ test('Pull Notion while CONFIRM card is open clears and cancels pending write be
           id: 'new-check-1',
           mind: 'work',
           kind: 'check',
-          content: nvda.suggested_next_check,
+          content: ntra.suggested_next_check,
           ticker,
-          source_citation: nvda.source_citation,
+          source_citation: ntra.source_citation,
           updates_next_check: true,
         },
         hud: {
-          header: 'WORK · NVDA · CONFIRM CHECK',
-          body: nvda.suggested_next_check,
+          header: 'WORK · NTRA · CONFIRM CHECK',
+          body: ntra.suggested_next_check,
           footer: 'Tap: save · Swipe: switch mind · 2x: cancel',
         },
       };
@@ -918,7 +918,7 @@ test('Pull Notion while CONFIRM card is open clears and cancels pending write be
   assert.equal(state.mode, 'BRIEFING');
   assert.equal(confirmCalls, 0);
 
-  // Tap 2 on BRIEFING deck previews NVDA's check instead of saving old unconfirmed note
+  // Tap 2 on BRIEFING deck previews NTRA's check instead of saving old unconfirmed note
   await executeTapAction(state, tapDeps);
   assert.equal(confirmCalls, 0);
   assert.equal(stageSuggestedCalls, 1);
@@ -940,15 +940,15 @@ test('Pull Notion while CONFIRM card is open clears and cancels pending write be
   assert.equal(state.mode, 'BRIEFING');
 });
 
-test('Cockpit boots into calm HOME (not NVIDIA) and returns to HOME after Personal/Interests saves', async () => {
-  const nvda = {
-    ticker: 'NVDA',
-    company: 'NVIDIA Corp.',
-    saved_question: 'Does NVIDIA expect the margin trough to get deeper?',
+test('Cockpit boots into calm HOME (not Natera) and returns to HOME after Personal/Interests saves', async () => {
+  const ntra = {
+    ticker: 'NTRA',
+    company: 'Natera, Inc.',
+    saved_question: 'Is Natera sustaining 63%+ ex-true-up gross margin as Signatera scales?',
     verdict: 'HELD' as const,
-    latest_finding: 'Q4 FY27 gross margin guide 71-72%.',
-    source_citation: 'Q3 FY27 PR',
-    suggested_next_check: 'Check price hikes',
+    latest_finding: 'Q3 GAAP GM 64.7%; ex-true-up non-GAAP GM 63.2% (+140 bps QoQ).',
+    source_citation: 'Q3 2026 PR',
+    suggested_next_check: 'Check ex-true-up GM',
     next_check: '',
     notion_page_id: null,
     updated_at: '2026-11-25T12:00:00Z',
@@ -956,14 +956,14 @@ test('Cockpit boots into calm HOME (not NVIDIA) and returns to HOME after Person
 
   // Fresh boot state starts in HOME with no leaked activeHolding
   const state = createInitialState();
-  state.holdings = [nvda];
+  state.holdings = [ntra];
   assert.equal(state.mode, 'HOME');
   assert.equal(state.returnMode, 'HOME');
   assert.equal(activeHolding(state), null);
   assert.equal(homeCard(state).header, 'COCKPIT · READY');
-  assert.equal(homeCard(state).body.includes('margin trough'), false);
+  assert.equal(homeCard(state).body.includes('ex-true-up gross margin'), false);
 
-  // Confirm an Interests note from HOME -> tap done returns to HOME (NOT NVDA!)
+  // Confirm an Interests note from HOME -> tap done returns to HOME (NOT NTRA!)
   state.mode = 'CONFIRM_WRITE';
   state.pendingWrite = {
     id: 'note-home-1',
@@ -1028,14 +1028,14 @@ test('Cockpit boots into calm HOME (not NVIDIA) and returns to HOME after Person
   assert.equal(state.mode, 'SAVED');
   assert.equal(state.returnMode, 'HOME');
 
-  // Tap 2: dismiss SAVED -> lands back on calm HOME showing Last saved, NOT NVIDIA
+  // Tap 2: dismiss SAVED -> lands back on calm HOME showing Last saved, NOT Natera
   await executeTapAction(state, tapDeps);
   assert.equal(state.mode, 'HOME');
   assert.equal(activeHolding(state), null);
   assert.equal(rendered.at(-1)?.header, 'COCKPIT · READY');
   assert.match(rendered.at(-1)?.body ?? '', /Acquired podcast/);
 
-  // Explicit Swipe from HOME opens the watchlist at NVDA 1/1
+  // Explicit Swipe from HOME opens the watchlist at NTRA 1/1
   await executeSwipeAction(state, 1, {
     isRecording: () => false,
     getActiveHolding: activeHolding,
@@ -1051,6 +1051,6 @@ test('Cockpit boots into calm HOME (not NVIDIA) and returns to HOME after Person
     },
   });
   assert.equal(state.mode, 'BRIEFING');
-  assert.equal(activeHolding(state)?.ticker, 'NVDA');
-  assert.match(rendered.at(-1)?.header ?? '', /WORK · NVDA/);
+  assert.equal(activeHolding(state)?.ticker, 'NTRA');
+  assert.match(rendered.at(-1)?.header ?? '', /WORK · NTRA/);
 });

@@ -13,7 +13,7 @@ Built for **[Heads Up: Even Realities Hackathon](https://dorahacks.io/hackathon/
 
 Most smart-glasses assistants treat *"Remember to buy a birthday present"* the same as *"Is Natera's underlying gross margin expanding without revenue true-ups?"* — sending every fleeting thought to a slow, chatty LLM that dumps paragraphs onto a narrow monochrome lens.
 
-Cockpit pairs a **calm default `HOME` screen** (`COCKPIT | READY`) with a **three-tier compute hierarchy** wired to a real **61-position sample equity portfolio** (`100.00%` weight in [backend/app/portfolio.py](backend/app/portfolio.py)), with the top three core holdings (**45.15%** combined weight: **Natera `NTRA` 29.22%**, **Seagate `STX` 9.07%**, **Amazon `AMZN` 6.86%**) deeply indexed from real Oct–Nov 2026 primary filings and all remaining 58 positions (e.g. `FOXA` 4.27%, `INSM` 4.19%, `YPF` 3.97%, `U` 3.62%, `SE` 3.47%, `WDC` 0.82%, `TSM` 0.33%) plus any external company supported on demand via web-grounded OpenRouter skills:
+Cockpit pairs a **calm default `HOME` screen** (`COCKPIT | READY`) with a **three-tier compute hierarchy** wired to a real **61-position sample equity portfolio** (`100.00%` weight loaded from [backend/app/data/portfolio.csv](backend/app/data/portfolio.csv)), with the top three core holdings (**45.15%** combined weight: **Natera `NTRA` 29.22%**, **Seagate `STX` 9.07%**, **Amazon `AMZN` 6.86%**) deeply indexed from real Oct–Nov 2026 primary filings and all remaining 58 positions (e.g. `FOXA` 4.27%, `INSM` 4.19%, `YPF` 3.97%, `U` 3.62%, `SE` 3.47%, `WDC` 0.82%, `TSM` 0.33%) plus any external company supported on demand via web-grounded OpenRouter skills:
 
 | Utterance (Hold temple / ring / mic) | Tier & Jev Decision (`~220 ms`) | On-Lens LLM? | What Happens on G2 + Notion |
 | :--- | :--- | :--- | :--- |
@@ -106,7 +106,7 @@ cp .env.example .env
 
 ### 3. Run the Test Suite & Build
 ```bash
-make test       # 35 Python pytest tests + 14 TypeScript Node tests
+make test       # 36 Python pytest tests + 14 TypeScript Node tests
 make build      # tsc --noEmit && vite build
 ```
 

@@ -105,11 +105,22 @@ def _pick_provider_cited_url(candidate: str, citation_urls: list[str]) -> str:
     return provider_urls[0]
 
 
+_MOCK_SHORTHAND_TICKERS: dict[str, str] = {
+    "alphabet": "GOOGL",
+    "google": "GOOGL",
+    "apple": "AAPL",
+    "tsmc": "TSM",
+}
+
+
 def _derive_short_ticker(company_query: str) -> str:
     m = _TICKER_IN_PARENS_RE.search(company_query)
     if m:
         return m.group(1)
-    letters = re.sub(r"[^A-Za-z]", "", company_query.split()[0] if company_query.strip() else "")
+    first_word = company_query.split()[0].strip(".,?!") if company_query.strip() else ""
+    if first_word.lower() in _MOCK_SHORTHAND_TICKERS:
+        return _MOCK_SHORTHAND_TICKERS[first_word.lower()]
+    letters = re.sub(r"[^A-Za-z]", "", first_word)
     return (letters[:6] or "EQUITY").upper()
 
 
@@ -269,20 +280,22 @@ class LLMWorker:
         system_prompt = (
             f"Today is {today.isoformat()} ({today.strftime('%A')}). "
             "You format single-glance equity research cards for Even Realities G2 monochrome smart glasses (576x288). "
+            "Identify the PRIMARY company the wearer is asking about from their utterance "
+            "(respect explicit share classes such as Fox Class B -> FOX vs Fox Class A -> FOXA, "
+            "and ignore incidental comparison mentions such as 'compared with ...'). "
             f"{mode_instruction} "
             "Plain text ONLY: no emojis, no markdown, no [text](url) links inside text fields, no investment advice. "
             "If web results do not contain a figure, do NOT fabricate it. Return strict JSON with keys: "
-            "'ticker' (uppercase symbol, e.g. GOOGL), "
+            "'ticker' (exact uppercase stock ticker, e.g. AAPL, FOX, INSM, GOOGL), "
             "'company' (short name), "
             "'finding' (<= 175 chars, dense with concrete numbers/watchpoints), "
             "'source_label' (<= 40 chars, e.g. 'Alphabet Q3 2026 IR' or 'Reuters · Nov 2026'), "
             "'suggested_next_check' (<= 95 chars, specific watch item for the next call)."
         )
         user_prompt = (
-            f"Company requested: {company_query}\n"
-            f"Portfolio status: {holding_note}\n"
             f"Skill mode: {mode}\n"
-            f"Wearer utterance: {utterance}"
+            f"Wearer utterance: {utterance}\n"
+            f"Portfolio hint (if known): {holding_note}"
         )
 
         parsed, citation_urls = await self._call_json_llm(

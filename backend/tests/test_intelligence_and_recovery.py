@@ -337,8 +337,88 @@ async def test_live_jev_untracked_holding_never_hijacked_by_active_ticker(
     assert decision.mind == Mind.WORK
     assert decision.action == ActionType.EARNINGS_PREVIEW
     assert decision.holding is None
-    assert decision.requested_company == "Insmed Incorporated (INSM)"
+    # Live Jev passes the raw utterance straight to the System-2 web LLM (zero regexes)
+    assert decision.requested_company == "Can you please preview Insmed earnings?"
     assert decision.needs_llm_worker is True
+
+
+def test_live_untracked_flow_delegates_entity_to_llm_and_looks_up_csv_weight(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """
+    In live mode, Jev classifies `holding=untracked` with zero hardcoded tickers/regexes,
+    the System-2 web LLM resolves the exact company & ticker from the raw utterance,
+    and main.py attaches the portfolio weight via a single dict lookup against portfolio.csv.
+    """
+    live_settings = Settings(
+        cockpit_mock_mode=False,
+        cockpit_db_path=str(tmp_path / "live_untracked.db"),
+        openrouter_api_key="sk-or-test",
+    )
+    app = create_app(live_settings)
+    runtime = app.state.runtime
+
+    async def fake_jev_call(_payload: dict):
+        return (
+            {
+                "model": "typesafe/jev-1.14",
+                "answers": {
+                    "mind": {"type": "choice", "choice": "work", "confidence": 0.97},
+                    "action": {"type": "choice", "choice": "earnings_preview", "confidence": 0.96},
+                    "holding": {"type": "choice", "choice": "untracked", "confidence": 0.95},
+                    "peer_holding": {"type": "choice", "choice": "none", "confidence": 0.99},
+                    "needs_llm_worker": {"type": "noul", "probability": 0.93},
+                    "needs_enrichment": {"type": "noul", "probability": 0.02},
+                },
+            },
+            180,
+        )
+
+    monkeypatch.setattr(runtime.jev, "_call_jev", fake_jev_call)
+
+    with TestClient(app) as client:
+        # 1. External company mentioned alongside a held company -> LLM resolves AAPL, no weight badge attached
+        async def fake_llm_apple(*_args, **_kwargs):
+            return (
+                {
+                    "ticker": "AAPL",
+                    "company": "Apple",
+                    "finding": "Apple preview: watch Services margin and iPhone China demand.",
+                    "source_label": "Apple IR",
+                    "suggested_next_check": "Check Apple Services gross margin trajectory",
+                },
+                ["https://investor.apple.com"],
+            )
+
+        monkeypatch.setattr(runtime.worker, "_call_json_llm", fake_llm_apple)
+        r_aapl = client.post(
+            "/api/text",
+            json={"transcript": "Preview Apple earnings compared with Insmed", "active_ticker": "NTRA"},
+        )
+        assert r_aapl.status_code == 200
+        assert r_aapl.json()["hud"]["header"] == "PREVIEW · AAPL · WEB"
+
+        # 2. Share-class holding ('Fox Class B') -> LLM resolves FOX, 1-line CSV dict lookup stamps (0.8%)
+        async def fake_llm_foxb(*_args, **_kwargs):
+            return (
+                {
+                    "ticker": "FOX",
+                    "company": "Fox Corporation — Class B",
+                    "finding": "Fox Class B preview: watch Tubi ad growth and affiliate fees.",
+                    "source_label": "Fox IR",
+                    "suggested_next_check": "Check Tubi revenue growth and EBITDA trajectory",
+                },
+                ["https://investor.foxcorporation.com"],
+            )
+
+        monkeypatch.setattr(runtime.worker, "_call_json_llm", fake_llm_foxb)
+        r_fox = client.post(
+            "/api/text",
+            json={"transcript": "Preview Fox Class B earnings", "active_ticker": "NTRA"},
+        )
+        assert r_fox.status_code == 200
+        assert r_fox.json()["hud"]["header"] == "PREVIEW · FOX (0.8%) · WEB"
 
 
 def test_legacy_sqlite_schema_migrates_cleanly_for_enrichment_columns(tmp_path: Path) -> None:
@@ -493,7 +573,7 @@ def test_router_target_specificity_and_unsupported_peer_clarification(tmp_path: 
         apple = r_apple.json()
         assert apple["decision"]["action"] == "earnings_preview"
         assert apple["decision"]["holding"] is None
-        assert apple["decision"]["requested_company"] == "Apple (AAPL)"
+        assert apple["decision"]["requested_company"] == "Apple"
         assert apple["hud"]["header"] == "PREVIEW · AAPL · WEB"
 
         # 1b. Target clause after leading comparison clause

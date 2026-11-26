@@ -44,11 +44,11 @@ Cockpit boots and rests on **`HOME` (`COCKPIT | READY`)** — never forcing a Wo
 - `POST /api/voice` base64-encodes WAV bytes and calls OpenRouter `POST /api/v1/audio/transcriptions` (`openai/whisper-large-v3-turbo`). In offline mock mode, `/api/voice` returns `"Can we review Natera earnings?"` unless `fallback_transcript` is supplied.
 
 ### Stage 2 — System-1 Triage (`services/jev_router.py`)
-- Single `~220 ms` call to `POST https://openrouter.ai/api/alpha/decisions` (`model: "~typesafe/jev-latest"`):
+- Single `~220 ms` call to `POST https://openrouter.ai/api/alpha/decisions` (`model: "~typesafe/jev-latest"`), with **zero hardcoded tickers or company tables** (watchlist choices are built dynamically from SQLite/Notion):
   - `mind` (`choice`): `work` | `personal` | `interests`
   - `action` (`choice`): `log_note` | `log_task` | `earnings_preview` | `brief_holding` | `follow_up_source` | `peer_read_across` | `draft_next_check` | `clarify`
-  - `holding` (`choice`): indexed core tickers (`NTRA`, `STX`, `AMZN` with company names) | `untracked` | `implicit_active` | `none`
-  - `peer_holding` (`choice`): indexed peer tickers | `none`
+  - `holding` (`choice`): dynamic indexed watchlist tickers | `untracked` | `implicit_active` | `none`
+  - `peer_holding` (`choice`): dynamic indexed peer tickers | `untracked` | `none`
   - `needs_llm_worker` (`noul` → `probability`): gates System-2 on-lens synthesis
   - `needs_enrichment` (`noul` → `probability`): gates async post-confirm background enrichment
 - **Tier 0 (Zero LLM, `< 5 ms` local compute):** Indexed-holding `earnings_preview` renders saved question, verified prior-quarter guidance baseline, and open `Next Check` directly from SQLite (with an optional live Notion pull beforehand when Notion is enabled).
@@ -57,7 +57,7 @@ Cockpit boots and rests on **`HOME` (`COCKPIT | READY`)** — never forcing a Wo
 ### Stage 3 — System-2 Work Skills (`services/retrieval.py` + `services/jev_router.py` + `services/llm_worker.py`)
 1. **Indexed core holdings (`NTRA`, `STX`, `AMZN`):** Pulls latest Notion `Saved Question` first → retrieves candidates via SQLite FTS5 → uses Jev (`is_answered` + `best_chunk` + `verdict`, with all candidate passages placed in `state`) → synthesizes `<= 190`-char sourced card via `deepseek/deepseek-v4.1-flash-1017` (or returns `No matching passage` with `verdict: null`).
 2. **Peer read-across (`AMZN → STX`):** Connects verified Amazon companywide FY26 cash capex passages (`~$220B` guided, heavily weighted toward AWS/AI infrastructure; `+39.3%` AWS growth) to Seagate's HAMR Mozaic nearline thesis and proposes a stageable check. Unsupported peer pairs return an explicit clarification card rather than silently swapping companies.
-3. **Any-company web preview & review (other 58 portfolio holdings or external names):** When Jev routes `holding = untracked`, `synthesize_adhoc_earnings()` runs a date-aware OpenRouter web-grounded call (`plugins: [{"id": "web", "max_results": 3}]`), stamps portfolio weight when held (`INSM (4.2%)`), strips markdown links for LVGL clarity, and returns a stageable watchpoint.
+3. **Any-company web preview & review (other 58 portfolio holdings or external names):** When Jev routes `holding = untracked`, the raw utterance passes straight to `synthesize_adhoc_earnings()` (live OpenRouter web-grounded call with `plugins: [{"id": "web", "max_results": 3}]`). The LLM resolves the exact company and ticker (including share class), and a 1-line dictionary lookup against `backend/app/data/portfolio.csv` stamps the portfolio weight when held (`INSM (4.2%)`, `FOX (0.8%)`) or leaves external names clean (`AAPL`, `GOOGL`).
 
 ### Stage 4 — Confirmed Writes, Partial Failure Semantics, Undo & Async Enrichment (`db.py` + `notion_sync.py` + `job_runner.py`)
 - **Commit ordering & partial failures:** `POST /api/confirm` consumes `pending_writes` and persists to SQLite inside a single `BEGIN IMMEDIATE` transaction (preventing duplicate concurrent confirms and capturing `previous_next_check` for rollback). Notion journal creation (`POST /v1/pages`) and watchlist `Next Check` sync (`PATCH /v1/pages/{id}`) run afterward as separate HTTP calls:

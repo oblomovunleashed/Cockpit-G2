@@ -28,7 +28,12 @@ from app.models import (
     UtteranceRequest,
     UtteranceResponse,
 )
-from app.portfolio import PORTFOLIO_POSITIONS, format_weight_badge
+from app.portfolio import (
+    PORTFOLIO_BY_TICKER,
+    PORTFOLIO_POSITIONS,
+    format_weight_badge,
+    lookup_portfolio_position,
+)
 from app.seed import seed_if_empty
 from app.services.jev_router import JevRouter, heuristic_needs_enrichment
 from app.services.job_runner import AsyncJobQueue, BackgroundJobRunner
@@ -329,7 +334,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         # --------------------------------------------------------------
         if decision.action == ActionType.DRAFT_NEXT_CHECK:
             if decision.holding is None and decision.requested_company:
-                ticker: str | None = decision.requested_company.split("(")[-1].rstrip(")").upper()[:8]
+                pos = lookup_portfolio_position(decision.requested_company)
+                ticker: str | None = pos.ticker if pos else None
                 holding = None
             else:
                 raw_ticker = decision.holding or active_ticker
@@ -362,14 +368,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         # --------------------------------------------------------------
         if decision.action == ActionType.EARNINGS_PREVIEW:
             if decision.holding is None and decision.requested_company:
-                weight_label = format_weight_badge(decision.requested_company)
+                pre_weight = None if cfg.live_openrouter_enabled else format_weight_badge(decision.requested_company)
                 resolved_ticker, finding, source_label, draft = await worker.synthesize_adhoc_earnings(
                     company_query=decision.requested_company,
                     mode="preview",
                     utterance=transcript,
-                    portfolio_weight_label=weight_label,
+                    portfolio_weight_label=pre_weight,
                 )
-                wt_label = weight_label or format_weight_badge(resolved_ticker)
+                pos = PORTFOLIO_BY_TICKER.get(resolved_ticker.upper())
+                wt_label = pos.weight_label if pos else None
                 ticker_badge = f"{resolved_ticker} ({wt_label})" if wt_label else resolved_ticker
                 hud = HudCard(
                     header=_clip(f"PREVIEW · {ticker_badge} · WEB", 60),
@@ -424,14 +431,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
             if not raw_target:
                 indexed_list = ", ".join(tickers)
-                unsupported_label = decision.requested_company or "that company"
+                unsupported_label = decision.requested_company or "That company"
                 if "(" in unsupported_label and unsupported_label.endswith(")"):
                     unsupported_label = unsupported_label.split("(")[-1].rstrip(")")
+                elif len(unsupported_label) > 24 or len(unsupported_label.split()) > 3:
+                    unsupported_label = "That company"
                 hud = HudCard(
                     header="WORK · PEER READ · CLARIFY",
                     body=_clip(
                         f"{unsupported_label} isn't in indexed peer filings ({indexed_list}). "
-                        f"Ask for an indexed pair or preview {unsupported_label} on web.",
+                        f"Ask for an indexed pair or preview it on web.",
                         240,
                     ),
                     footer="Hold: e.g. 'What does Amazon capex mean for Seagate?'",
@@ -457,9 +466,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     peer_label = decision.requested_company
                     if "(" in peer_label and peer_label.endswith(")"):
                         peer_label = peer_label.split("(")[-1].rstrip(")")
+                    elif len(peer_label) > 24 or len(peer_label.split()) > 3:
+                        peer_label = "That peer"
                     body = (
                         f"{peer_label} isn't in indexed peer filings for {target_ticker} "
-                        f"(indexed peers: {peers}). Ask for an indexed peer or preview {peer_label} on web."
+                        f"(indexed peers: {peers}). Ask for an indexed peer or preview it on web."
                     )
                 else:
                     body = f"Specify a peer to read across to {target_ticker} (available: {peers})."
@@ -578,14 +589,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         # --------------------------------------------------------------
         if decision.holding is None and decision.requested_company:
             mode = "followup" if decision.action == ActionType.FOLLOW_UP_SOURCE else "review"
-            weight_label = format_weight_badge(decision.requested_company)
+            pre_weight = None if cfg.live_openrouter_enabled else format_weight_badge(decision.requested_company)
             resolved_ticker, finding, source_label, draft = await worker.synthesize_adhoc_earnings(
                 company_query=decision.requested_company,
                 mode=mode,
                 utterance=transcript,
-                portfolio_weight_label=weight_label,
+                portfolio_weight_label=pre_weight,
             )
-            wt_label = weight_label or format_weight_badge(resolved_ticker)
+            pos = PORTFOLIO_BY_TICKER.get(resolved_ticker.upper())
+            wt_label = pos.weight_label if pos else None
             ticker_badge = f"{resolved_ticker} ({wt_label})" if wt_label else resolved_ticker
             hud = HudCard(
                 header=_clip(f"WORK · {ticker_badge} · WEB", 60),

@@ -23,7 +23,7 @@ Real-world findings captured during live integration testing against **OpenRoute
 
 ## 2. Typed Work Skills & 61-Position Portfolio Architecture
 
-Cockpit tracks the full **61-position portfolio (`100.00%` weight)** in `backend/app/portfolio.py`, indexing real Oct–Nov 2026 primary filings for the top three core holdings (**`NTRA` 29.22%**, **`STX` 9.07%**, **`AMZN` 6.86%** — 45.15% combined weight):
+Cockpit loads the full **61-position portfolio (`100.00%` weight)** from a plain 3-column CSV ([backend/app/data/portfolio.csv](../backend/app/data/portfolio.csv)) with zero hardcoded tickers in the live Jev router, indexing real Oct–Nov 2026 primary filings for the top three core holdings (**`NTRA` 29.22%**, **`STX` 9.07%**, **`AMZN` 6.86%** — 45.15% combined weight):
 
 | Skill | Compute Tier | Behavior on G2 (`576 × 288`) |
 | :--- | :--- | :--- |

@@ -7,6 +7,14 @@
 
 Built for **[Heads Up: Even Realities Hackathon](https://dorahacks.io/hackathon/even-realities/detail)** (Nov 23–29, 2026) — **Track 04 · AI Assistants & Work** (`OpenRouter` + `Notion`).
 
+### Live Captures (Even Hub Simulator `0.9.5` + OpenRouter Jev / DeepSeek + Two-Way Notion)
+
+| Fast Path + Async Enrichment | Local Date + 1-Swipe Live Undo |
+| :---: | :---: |
+| ![Fast path enrichment](docs/screenshots/03-interests-live-enrichment.png) | ![1-swipe live Undo](docs/screenshots/04-personal-local-date-undo.png) |
+| **Two-Way Notion: One Release, Two Glances** | **61-Position Portfolio: Live Web Preview** |
+| ![One release two glances](docs/screenshots/06-two-way-notion-two-glances.png) | ![61-position live web preview](docs/screenshots/08-61-position-live-web-insmed.png) |
+
 ---
 
 ## Why Cockpit?

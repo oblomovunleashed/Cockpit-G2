@@ -1,149 +1,120 @@
-![Cockpit — Heads-Up Command · Even G2](assets/cockpit-banner.png)
+![Cockpit G2 — The Control Centre for your second Brain](assets/cockpit-banner.png)
 
-# Cockpit — Heads-Up Command Centre for Even G2
+# Cockpit G2 — The Control Centre for your second Brain
 
-> **“Logged, logged — LLM worker.”**
-> One universal hold-to-speak gesture across **Work**, **Personal**, and **Interests** on Even Realities G2 smart glasses (`576 × 288` monochrome green). **Jev** (System 1 on OpenRouter, `~220 ms` triage) decides whether to stage a quick log for **Notion** (with optional async enrichment behind the scenes) or wake the **System-2** worker for sourced earnings research — returning **one calm, verifiable card** at a glance.
+One calm hold-to-speak gesture across **Work**, **Personal**, and **Interests** on **Even Realities G2** (`576 × 288` monochrome green). **OpenRouter Jev** (System 1, `~200–460 ms`) routes quick thoughts straight to **Notion** without stalling on an LLM, and wakes **DeepSeek** (System 2) only when you need sourced research or background enrichment — returning **one calm, verifiable card** at a glance.
 
 Built for **[Heads Up: Even Realities Hackathon](https://dorahacks.io/hackathon/even-realities/detail)** (Nov 23–29, 2026) — **Track 04 · AI Assistants & Work** (`OpenRouter` + `Notion`).
 
-### Live Captures (Even Hub Simulator `0.9.5` + OpenRouter Jev / DeepSeek + Two-Way Notion)
+### Live Captures (`Even Hub Simulator 0.9.5` + OpenRouter Jev / DeepSeek + Two-Way Notion)
 
 | Fast Path + Async Enrichment | Local Date + 1-Swipe Live Undo |
 | :---: | :---: |
 | ![Fast path enrichment](docs/screenshots/03-interests-live-enrichment.png) | ![1-swipe live Undo](docs/screenshots/04-personal-local-date-undo.png) |
-| **Two-Way Notion: One Release, Two Glances** | **61-Position Portfolio: Live Web Preview** |
-| ![One release two glances](docs/screenshots/06-two-way-notion-two-glances.png) | ![61-position live web preview](docs/screenshots/08-61-position-live-web-insmed.png) |
+| **Two-Way Notion: One Release, Two Glances** | **Zero Hardcoded Tickers: CSV + Live Web** |
+| ![One release two glances](docs/screenshots/06-two-way-notion-two-glances.png) | ![Zero hardcoded tickers live web preview](docs/screenshots/08-61-position-live-web-insmed.png) |
 
 ---
 
-## Why Cockpit?
+## Why Cockpit G2?
 
-Most smart-glasses assistants treat *"Remember to buy a birthday present"* the same as *"Is Natera's underlying gross margin expanding without revenue true-ups?"* — sending every fleeting thought to a slow, chatty LLM that dumps paragraphs onto a narrow monochrome lens.
+Most smart-glasses assistants treat *"Book dinner next Friday"* the same as *"What changed in my biggest position's earnings?"* — stalling on a slow LLM for every utterance and dumping walls of chat onto a tiny green lens.
 
-Cockpit pairs a **calm default `HOME` screen** (`COCKPIT | READY`) with a **three-tier compute hierarchy** wired to a real **61-position sample equity portfolio** (`100.00%` weight loaded from [backend/app/data/portfolio.csv](backend/app/data/portfolio.csv)), with the top three core holdings (**45.15%** combined weight: **Natera `NTRA` 29.22%**, **Seagate `STX` 9.07%**, **Amazon `AMZN` 6.86%**) deeply indexed from real Oct–Nov 2026 primary filings and all remaining 58 positions (e.g. `FOXA` 4.27%, `INSM` 4.19%, `YPF` 3.97%, `U` 3.62%, `SE` 3.47%, `WDC` 0.82%, `TSM` 0.33%) plus any external company supported on demand via web-grounded OpenRouter skills:
+Cockpit G2 boots into a calm `COCKPIT | READY` screen and splits every voice command across **three compute tiers**:
 
-| Utterance (Hold temple / ring / mic) | Tier & Jev Decision (`~220 ms`) | On-Lens LLM? | What Happens on G2 + Notion |
-| :--- | :--- | :--- | :--- |
-| *"Remember to buy a birthday present"* | **Tier 1** · `Personal · LOG_TASK` (`enrich: no`) | **No** | Instant `CONFIRM` card → **1 tap** logs to SQLite + Notion `Cockpit Log` (`~$0.000057` Jev triage) |
-| *"I enjoyed the latest Acquired podcast"* | **Tier 1 → Async Tier 2** · `Interests · LOG_NOTE` (`enrich: yes`) | **No** *(async)* | Instant `CONFIRM` → `SAVED`; background worker resolves latest episode + provider-cited link and patches Notion in place (never guesses unnamed shows → `Needs Detail`) |
-| *"Preview Natera before earnings"* | **Tier 0** · `Work · EARNINGS_PREVIEW` (indexed core) | **No** | Local render `< 5 ms` from SQLite (`29.2% wt`, `Saved Question`, prior baseline, open `Next Check`); zero LLM call *(spoken flow still includes STT + Jev + optional Notion pull)* |
-| *"Can you please preview Insmed earnings?"* | **Tier 1 + Tier 2 Web** · `Work · EARNINGS_PREVIEW` (portfolio) | **Yes** *(web)* | Recognizes `INSM` from the 61-position book (`PREVIEW \| INSM (4.2%) \| WEB`) + stageable watchpoint; non-held names like Alphabet work identically (`PREVIEW \| GOOGL \| WEB`) |
-| *"Can we review Natera earnings?"* | **Tier 1 + Tier 2** · `Work · BRIEF_HOLDING` | **Yes** | Pulls latest Notion question first, checks real Q3 2026 release via FTS5 + Jev, renders **1 sourced delta card** (`HELD` / `AHEAD` / `WATCH`) |
-| *"What does Amazon capex mean for Seagate?"* | **Tier 1 + Tier 2** · `Work · PEER_READ_ACROSS` | **Yes** | Connects Amazon's real Oct 29 `~$220B` companywide FY26 cash capex guidance (heavily weighted to AWS/AI infrastructure) to Seagate's HAMR Mozaic nearline thesis + proposes a 2-tap verified `Next Check` |
+| Utterance (Hold temple / ring / mic) | Tier & Live Jev Route | Blocking LLM? | Result on G2 + Live Notion |
+| :--- | :--- | :---: | :--- |
+| *"I really liked the latest Invest Like The Best podcast."* | **Tier 1 → Async Tier 2** · `Interests` (`~460 ms`) | **No** *(async)* | Instant `CONFIRM` → 1 tap logs to Notion; background worker resolves **EP.502 (Scott Wu)** + provider-cited Spotify link in place |
+| *"Remember to book dinner with my wife next Friday."* | **Tier 1** · `Personal` (`~260 ms`) | **No** | Resolves `Fri 4 Dec 2026` locally (zero LLM) and saves to Notion; **1 swipe** on `SAVED` deletes locally & archives the row live (`archived: true`) |
+| *"Can we review Natera earnings?"* | **Tier 1 + Tier 2** · `Work · Brief` (`~200 ms`) | **Yes** | Pulls your latest Notion `Saved Question`, checks indexed Q3 filings via FTS5 + Jev, renders **1 sourced card** (`HELD` / `AHEAD` / `WATCH`) |
+| *"What drove Signatera ASP and cash flow?"* | **Tier 1 + Tier 2** · `Work · Follow-Up` (`~205 ms`) | **Yes** | Retrieves the exact call passage (`~$1,290 ASP; cash $1.10B, FCF-positive`); **Tap 1** previews exact check wording, **Tap 2** writes to Notion |
+| *"Can you please preview Insmed earnings?"* | **Tier 1 + Tier 2 Web** · `Work · Preview` (`~200 ms`) | **Yes** *(web)* | **Zero hardcoded tickers:** routes directly to live web search, resolves `INSM`, and tags weight (`4.2%`) from a drop-in CSV — any public stock works |
 
-### Measured Latency: Local Compute vs. End-to-End Live
-We report local compute and network-bound end-to-end timings separately (details in [docs/live-wiring-learnings.md](docs/live-wiring-learnings.md)):
-- **Local compute (Tier 0):** SQLite FTS5 retrieval and indexed `earnings_preview` card formatting run in **`< 5 ms`** (`$0`).
-- **System-1 routing (Tier 1):** OpenRouter Jev (`~typesafe/jev-latest`) averages **`~210–315 ms`** warm (`~$0.000057`/call).
-- **Spoken end-to-end (live):** Voice utterances add OpenRouter Whisper STT (`~1.6–2.2 s`) before Jev routing; live indexed previews/briefings also await a Notion watchlist pull, and live `SAVED` receipts await the Notion page write before updating the HUD.
-- **System-2 synthesis (Tier 2):** DeepSeek V4.1 Flash runs in `~2.2 s` for indexed filing synthesis (`~10 s` with live OpenRouter web search for non-indexed portfolio/external companies or async background enrichment, where background enrichment never blocks the `SAVED` confirmation).
+> **Example Work Domain:** The **Work** mind ships configured as a strictly read-only equity research workflow to prove real-world density — including a **sample CSV watchlist** ([backend/app/data/portfolio.csv](backend/app/data/portfolio.csv)) and three indexed Oct–Nov 2026 primary releases ([Natera Q3](https://investor.natera.com/news-releases/news-release-details/natera-reports-third-quarter-2026-financial-results), [Seagate Q1 FY27](https://investors.seagate.com/news/news-details/2026/Seagate-Technology-Reports-Fiscal-First-Quarter-2027-Financial-Results/default.aspx), [Amazon Q3](https://ir.aboutamazon.com/news-release/news-release-details/2026/Amazon-com-Announces-Third-Quarter-Results/default.aspx)). Swap in your own CSV or edit your Notion watchlist to adapt it with zero code changes.
 
 ---
 
-## Signature Work Demo: “One Release, Two Different Glances”
+## Signature Moment: “One Release, Two Glances”
 
-Cockpit indexes real Oct–Nov 2026 primary earnings releases for the portfolio's top three positions — **Natera (`NTRA`, 29.22% — [Q3 2026 Release, Nov 5](https://investor.natera.com/news-releases/news-release-details/natera-reports-third-quarter-2026-financial-results))**, **Seagate (`STX`, 9.07% — [Q1 FY27 Release, Oct 27](https://investors.seagate.com/news/news-details/2026/Seagate-Technology-Reports-Fiscal-First-Quarter-2027-Financial-Results/default.aspx))**, and **Amazon (`AMZN`, 6.86% — [Q3 2026 Release, Oct 29](https://ir.aboutamazon.com/news-release/news-release-details/2026/Amazon-com-Announces-Third-Quarter-Results/default.aspx))** — strictly read-only. Changing the single `Saved Question` on Natera's Notion watchlist row flips the first card rendered from the exact same **Nov 5, 2026 Q3 2026 earnings release**:
+Edit a single `Saved Question` cell directly in Notion and pull to the glasses — the **exact same Nov 5 Natera Q3 filing** flips the G2 card on demand:
 
-| `Saved Question` in Notion (`NTRA · 29.2%`) | What the wearer sees on G2 (`576 × 288`) |
+| `Saved Question` in Notion (`NTRA`) | What appears on Even G2 (`576 × 288`) |
 | :--- | :--- |
-| *“Is Natera's underlying gross margin expanding without revenue true-ups?”* | `Q3 2026 GAAP GM 64.7%; ex-true-ups 63.2% (+140 bps QoQ on COGS gains). True-ups fell to $32.3M vs $52.3M in Q2.` `[NTRA Q3 2026 PR · Nov 5]` |
-| *“Is Signatera volume and revenue running ahead of full-year guidance?”* | `Q3 rev $794.0M (+34% YoY); oncology tests 339.5k (+61% YoY). FY26 guide raised $140M at mid to $3.005-$3.035B.` `[NTRA Q3 2026 PR · Nov 5]` |
+| *“Is Natera's underlying gross margin expanding without revenue true-ups?”* | `Underlying non-GAAP gross margin ex-true-ups 63.2% (+140 bps QoQ); true-ups fell to $32.3M vs $52.3M.` `[NTRA Q3 2026 PR · Nov 5]` |
+| *“Is Signatera volume and revenue running ahead of full-year guidance?”* | `Signatera-led clinical MRD ~316,000 units (+56% YoY); Q3 rev $794.0M (+34.1% YoY); FY26 guide raised $140M.` `[NTRA Q3 2026 PR · Nov 5]` |
 
-- **Follow-up retrieval + honest abstention:** Ask *"What drove Signatera ASP and cash flow?"* to retrieve the Nov 5 Q3 call passage (`Signatera ASP ~$1,290 vs $1,270 Q2 on MolDX/reimbursement; cash +$5.7M to $1.10B, FCF-positive`). Ask an unsupported question such as *"What did management say about Natera warranty reserves?"* (or set NTRA's `Saved Question` to *"Warranty reserves?"*) to see Cockpit honestly return **`No matching passage`** instead of hallucinating.
-- **Zero-surprise human-in-the-loop controls:**
-  - **2-tap preview before save:** AI-drafted checks are never written unseen — tap once to inspect exact wording on `CONFIRM CHECK`, tap again to save.
-  - **Fix misclassifications on the glasses:** On any `CONFIRM` card, **`Swipe`** cycles destination in place (`Interests Note` ↔ `Personal Task` ↔ `Work Check`) without re-speaking; **`Double-tap`** discards.
-  - **Stay-until-tap receipt + Undo (with partial-failure transparency):** After saving, the `SAVED` card stays on screen until you **`Tap`** back to calm `HOME` (or **`Swipe`** to **Undo**). SQLite commits first and Notion create / watchlist PATCH / archive run as independent API calls: if Notion is unreachable, the HUD shows `Saved to Journal.` (local-only), and Undo removes the SQLite row locally (`Removed from Journal.`) while any already-synced Notion row or remote `Next Check` may remain until Notion is reachable.
-  - **Enrichment privacy & citation guard:** When Jev flags a confirmed Personal/Interests note for live background enrichment, the full confirmed note text is sent to OpenRouter's web-enabled model (`deepseek/deepseek-v4.1-flash-1017` + `web` plugin). Only URLs matching OpenRouter's provider `url_citation` annotations are published as clickable links; unverified model-invented links are dropped.
+- **Honest abstention:** Ask something unsupported by the filing (e.g., *"What did management say about Natera warranty reserves?"*) and Cockpit returns **`WORK | NTRA | NO MATCH`** instead of guessing.
+- **Human-confirmed writes only:** AI never writes unseen — **1 tap** confirms fast Personal/Interests saves (with **Swipe** to switch destination in place), **2 taps** preview and commit Work checks, and **1 swipe** on `SAVED` triggers live Undo.
+- **Verified provenance:** Background enrichment only attaches links verified in OpenRouter provider `url_citation` annotations; local SQLite commits first and HUD receipts distinguish `Saved to Notion + Journal.` vs. local-only `Saved to Journal.`.
 
 ---
 
-## Architecture
+## Architecture & Performance
 
 ```text
-Even G2 Glasses / Even Hub Simulator (576x288 monochrome green, 16 kHz CoreAudio PCM mic)
+Even G2 Glasses / Even Hub Simulator 0.9.5 (576×288 green HUD, 16 kHz CoreAudio PCM mic)
         │  @evenrealities/even_hub_sdk (0.0.16)
         ▼
-glasses/ (Vite + TypeScript plugin · 3 fixed LVGL text containers · serialized upgrades)
+glasses/ (Vite + TypeScript · 3 fixed LVGL containers · serialized HUD upgrades)
         │  HTTP (JSON + 16 kHz RIFF/WAV -> local loopback 127.0.0.1:8000)
         ▼
-backend/ (Python 3.13 · FastAPI · SQLite + FTS5 · 61-Position Portfolio Registry · Async Queues)
-   ├── OpenRouter STT          POST /api/v1/audio/transcriptions  (openai/whisper-large-v3-turbo)
-   ├── OpenRouter Jev          POST /api/alpha/decisions          (~typesafe/jev-latest, ~220 ms)
-   ├── OpenRouter Synthesis    POST /api/v1/chat/completions      (deepseek/deepseek-v4.1-flash-1017 + web plugin)
-   └── Notion API              Live 2-way sync (Cockpit Log w/ enrichment + Holdings Watchlist)
+backend/ (Python 3.13 · FastAPI · SQLite + FTS5 · Drop-in CSV Registry · Async Workers)
+   ├── OpenRouter STT          openai/whisper-large-v3-turbo     (~1.6–2.2 s spoken transcription)
+   ├── OpenRouter Jev          ~typesafe/jev-latest              (~200–460 ms, ~$0.00006/call)
+   ├── OpenRouter Synthesis    deepseek/deepseek-v4.1-flash-1017 (~2.2 s indexed / ~10 s live web)
+   └── Live Two-Way Notion     Cockpit Log (writes, async enrichment, Undo) & Holdings Watchlist
 ```
 
-- **Technical architecture, G2 gesture map & Notion schema:** [docs/architecture.md](docs/architecture.md)
-- **≤3-minute split-screen demo storyboard & 5 API feature requests:** [docs/demo-script.md](docs/demo-script.md)
-- **Live OpenRouter, Jev, Notion & Even Hub Simulator learnings:** [docs/live-wiring-learnings.md](docs/live-wiring-learnings.md)
+- **Tier 0 (local):** SQLite FTS5 retrieval & indexed previews render in **`< 5 ms`** (`$0`).
+- **Verification:** **51 automated tests** (`37` Python + `14` TypeScript) and **`15/15` live OpenRouter + Notion smoke checks**.
+- **Deep dives:** [Architecture & Gestures](docs/architecture.md) · [Demo Script & 5 API Requests](docs/demo-script.md) · [Live Wiring Learnings](docs/live-wiring-learnings.md) · [DoraHacks Kit](docs/dorahacks-submission.md)
 
 ---
 
 ## Quickstart
 
-### Prerequisites
-- **Python 3.11+** (tested on Python 3.13)
-- **Node.js 22 LTS** (`>=22.18`, tested on `22.23.5` for strict CLI engine checks and `--experimental-strip-types`; also runs on Node `23.1.0`)
-- `@evenrealities/evenhub-simulator` (`0.9.5`) and `@evenrealities/evenhub-cli` (`0.1.14`) are installed cleanly from the lockfile via `make setup` (`npm ci`).
+**Prerequisites:** Python `3.11+` (tested on `3.13`) and Node.js `22 LTS` (`>=22.18`). `make setup` installs `@evenrealities/evenhub-simulator` (`0.9.5`) and `@evenrealities/evenhub-cli` (`0.1.14`) from the lockfile.
 
-### 1. Install Dependencies
 ```bash
 make setup
-```
-
-### 2. Configure Environment (Offline Mock Mode or Live OpenRouter + Notion)
-```bash
 cp .env.example .env
 ```
-- **Zero-key mock mode (default, `COCKPIT_MOCK_MODE=true`):** Runs the full vertical slice locally (deterministic router, FTS5 retrieval over `NTRA`/`STX`/`AMZN`, full 61-position portfolio registry, local enrichment stubs, SQLite journal, and Even Hub Simulator) with no API keys.
-  - *Evaluator note for mock mode:* Use the **companion text box and quick demo buttons** to test different utterances (in mock mode, microphone clips always transcribe to `"Can we review Natera earnings?"`). To test abstention from `HOME`, type `"What did management say about Natera warranty reserves?"` — Cockpit returns `WORK | NTRA | NO MATCH`.
-- **Live OpenRouter + Notion mode:**
-  1. Set `COCKPIT_MOCK_MODE=false` and add `OPENROUTER_API_KEY`.
-  2. Create an internal Notion integration, share a blank Notion page with it, set `NOTION_TOKEN` + `NOTION_PARENT_PAGE_ID` in `.env`, and run:
-     ```bash
-     make setup-notion
-     ```
-     This auto-creates **`Cockpit Log`** (with `Enrichment`, `Enriched`, `Due Date`, `Link`) and **`Holdings Watchlist`** (seeded with `NTRA`, `STX`, `AMZN`) and writes their database IDs into `.env`. *(If upgrading an existing Notion watchlist, run `make sync-watchlist`.)*
-  3. Run the read-only live connectivity check (verifies OpenRouter Jev, DeepSeek, Whisper STT, and Notion `pull_holdings`; exits non-zero if no live providers are configured; pass `--write` via `PYTHONPATH=backend backend/.venv/bin/python -m app.scripts.smoke_live --write` to also test appending a row to `Cockpit Log`):
-     ```bash
-     make smoke-live
-     ```
+
+- **Zero-key mock mode (default, `COCKPIT_MOCK_MODE=true`):** Runs the entire vertical slice offline with no API keys. Use the companion text box or quick demo buttons to test different utterances (mock mic input defaults to Natera review).
+- **Live OpenRouter + Notion mode:** Set `COCKPIT_MOCK_MODE=false`, add `OPENROUTER_API_KEY`, `NOTION_TOKEN`, and a shared `NOTION_PARENT_PAGE_ID` in `.env`, then run:
+  ```bash
+  make setup-notion   # Auto-creates Cockpit Log & Holdings Watchlist and writes DB IDs to .env
+  make smoke-live     # Verifies live OpenRouter Jev, DeepSeek, Whisper STT & Notion read-back
+  ```
   *(Never commit `.env` or `backend/data/cockpit.db` — both are gitignored.)*
 
-### 3. Run the Test Suite & Build
+### Test, Build & Run
+
 ```bash
-make test       # 37 Python pytest tests + 14 TypeScript Node tests
-make build      # tsc --noEmit && vite build
+make test           # 37 Python pytest tests + 14 TypeScript Node tests
+make build          # tsc --noEmit && vite build
 ```
 
-### 4. Launch Backend, Glasses App, and Even Hub Simulator
-In three terminals:
+Launch in three terminals:
+
 ```bash
-# Terminal 1 — FastAPI backend (http://127.0.0.1:8000)
-make backend
-
-# Terminal 2 — Even G2 TypeScript companion & HUD app (http://127.0.0.1:5173)
-make glasses
-
-# Terminal 3 — Even Hub G2 Simulator (576x288 LVGL display + native CoreAudio mic)
-make sim
+make backend        # Terminal 1 — FastAPI backend (http://127.0.0.1:8000)
+make glasses        # Terminal 2 — Even G2 companion & HUD app (http://127.0.0.1:5173)
+make sim            # Terminal 3 — Even Hub G2 Simulator (576×288 + CoreAudio mic)
 ```
 
-### 5. Build the Desktop / Simulator `.ehpk` Package
-```bash
-make pack
-```
-Produces `glasses/cockpit.ehpk` (`min_app_version 2.2.10`, stamped against SDK `0.0.16`, declaring both `network` and `g2-microphone` permissions in [glasses/app.json](glasses/app.json)).
+### Package `.ehpk`
 
-> **Desktop vs. physical phone deployment note:** The included `make pack` build targets the local desktop FastAPI service at `http://127.0.0.1:8000` (unauthenticated loopback for local simulator development). Distributing an `.ehpk` to a physical phone WebView requires pointing `glasses/src/api.ts` and the `network` whitelist in `glasses/app.json` to a reachable **HTTPS backend with authentication** (since the loopback API intentionally omits auth for local development).
+```bash
+make pack           # Builds glasses/cockpit.ehpk (min_app_version 2.2.10, SDK 0.0.16, network + g2-microphone)
+```
+
+> **Desktop vs. phone deployment:** `make pack` targets the unauthenticated local desktop loopback (`http://127.0.0.1:8000`) for simulator evaluation. Deploying to a physical phone WebView requires pointing `glasses/src/api.ts` and `glasses/app.json` to an authenticated HTTPS backend.
 
 ---
 
-## Safety, Provenance & Hackathon Disclosures
+## Safety & Disclosures
 
-- **Read-only financial data:** Cockpit never holds funds, places trades, connects to brokerage execution, or offers investment advice. All portfolio weights, financial documents, and web lookups are strictly read-only; confirmed writes go exclusively to the user's personal Notion/SQLite journal.
-- **Build window:** All code, automated tests, brand assets, Even Hub packaging, and live OpenRouter/Notion integrations in this repository were built during the **Nov 23–29, 2026** hackathon build window.
-- **AI-assisted development disclosure:** Built solo with AI-assisted coding tools (disclosed per hackathon organizer guidelines).
-- **API feature requests (5):** Documented in [docs/demo-script.md](docs/demo-script.md).
+- **Strictly read-only financial inputs:** No brokerage execution, trading, or investment advice. Confirmed writes go exclusively to your personal SQLite journal and Notion workspace.
+- **Hackathon build window:** All code, tests, brand assets, `.ehpk` packaging, and live integrations were built during **Nov 23–29, 2026** (built solo with AI-assisted coding tools).
+- **API & SDK feature requests (5):** Documented in [docs/demo-script.md](docs/demo-script.md).

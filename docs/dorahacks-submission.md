@@ -11,7 +11,7 @@ Ready-to-paste fields, gallery screenshot mapping, and checklist for **Heads Up:
 - **Track:** `Track 04 · AI Assistants & Work`
 - **Ecosystem / Tech Tags:** `Even Realities G2`, `Even Hub SDK`, `OpenRouter`, `TypeSafe Jev`, `DeepSeek`, `Whisper`, `Notion`, `FastAPI`, `TypeScript`, `SQLite FTS5`
 - **GitHub Repository:** `https://github.com/oblomovunleashed/Cockpit-G2` *(flip repo from `PRIVATE` to `PUBLIC` before submitting!)*
-- **Demo Video (`2m 25s`):** Upload `/Users/dominic/Desktop/Cockpit - Your Control Centre (Live Demo).mp4` to **YouTube (Unlisted)** and paste the URL here.
+- **Demo Video (`2m 04s`):** Upload `/Users/dominic/Desktop/Cockpit - Your Control Centre (Live Demo).mp4` to **YouTube (Unlisted)** and paste the URL here.
 - **Avatar / Logo:** `assets/cockpit-logo-512.png`
 - **Cover Banner (`16:9`):** `docs/screenshots/01-cover-cockpit-g2.png` *(or `assets/cockpit-banner.png`)*
 
@@ -23,7 +23,7 @@ Ready-to-paste fields, gallery screenshot mapping, and checklist for **Heads Up:
 5. `docs/screenshots/05-work-natera-verified-write.png` — **2-Tap Verified Write** · Natera (`29.2%`) Q3 2026 review + call follow-up → preview exact check before writing to Notion Log & Watchlist
 6. `docs/screenshots/06-two-way-notion-two-glances.png` — **Signature Moment: One Release, Two Glances** · Edit `Saved Question` live in Notion → pull → exact same Nov 5 release flips card to `+56%` Signatera MRD & `$140M` guide raise
 7. `docs/screenshots/07-zero-hallucination-abstention.png` — **Honest Abstention Guard** · `Warranty reserves?` → `WORK | NTRA | NO MATCH` (zero fabricated claims)
-8. `docs/screenshots/08-61-position-live-web-insmed.png` — **61-Position Portfolio Scale** · Zero hardcoded tickers: live Jev (`203 ms`) → DeepSeek Web → 1-line `portfolio.csv` lookup stamps `PREVIEW | INSM (4.2%) | WEB`
+8. `docs/screenshots/08-61-position-live-web-insmed.png` — **Zero Hardcoded Tickers: CSV + Live Web** · Live Jev (`203 ms`) → DeepSeek Web → 1-line `portfolio.csv` lookup stamps `PREVIEW | INSM (4.2%) | WEB` from a drop-in sample watchlist
 9. `docs/screenshots/09-architecture-and-safety.png` — **Stack, Telemetry & Safety Summary** · 51 automated tests, `15/15` live smoke checks, packaged `.ehpk`
 
 ---
@@ -57,7 +57,7 @@ Every spoken thought enters through **TypeSafe Jev** (`POST /api/alpha/decisions
 
 ## Signature Moment: “One Release, Two Different Glances” (Live Two-Way Notion)
 
-Cockpit indexes real Oct–Nov 2026 primary earnings releases for the top three holdings of a real **61-position equity portfolio (`100.00%` weight in `backend/app/data/portfolio.csv`)**: **Natera (`NTRA`, 29.22%)**, **Seagate (`STX`, 9.07%)**, and **Amazon (`AMZN`, 6.86%)**.
+As a concrete **Work** example, Cockpit ships with a drop-in sample watchlist (`backend/app/data/portfolio.csv`) and indexes real Oct–Nov 2026 primary earnings releases for three sample holdings (**Natera `NTRA`**, **Seagate `STX`**, and **Amazon `AMZN`**) — strictly read-only, and adaptable to any user CSV or public company with zero code changes:
 
 1. With `NTRA`'s `Saved Question` in Notion set to *"Is Natera's underlying gross margin expanding without revenue true-ups?"*, Cockpit surfaces `ex-true-ups 63.2% (+140 bps QoQ); true-ups fell to $32.3M vs $52.3M` `[NTRA Q3 2026 PR · Nov 5]`.
 2. Edit that single `Saved Question` cell directly in Notion to *"Is Signatera volume and revenue running ahead of full-year guidance?"* and pull to the glasses: the **exact same Nov 5 release** flips the G2 card to **`WORK | NTRA 1/3 | AHEAD` — `Signatera-led clinical MRD ~316,000 units (+56% YoY); Q3 revenue $794.0M (+34.1% YoY); FY26 guide raised $140M`**.
@@ -89,10 +89,10 @@ Even G2 Glasses / Even Hub Simulator 0.9.5 (576×288 green HUD, 16 kHz CoreAudio
 glasses/ (Vite + TypeScript · 3 fixed LVGL containers · serialized upgrades)
         │  HTTP (JSON + 16 kHz RIFF/WAV -> desktop loopback 127.0.0.1:8000)
         ▼
-backend/ (Python 3.13 · FastAPI · SQLite + FTS5 · 61-position portfolio.csv · Async Queues)
+backend/ (Python 3.13 · FastAPI · SQLite + FTS5 · Drop-in CSV Registry · Async Queues)
    ├── OpenRouter STT          openai/whisper-large-v3-turbo     (~2.1 s spoken transcription)
    ├── OpenRouter Jev          ~typesafe/jev-latest              (~200–460 ms, ~$0.00006/call)
-   ├── OpenRouter System-2     deepseek/deepseek-v4.1-flash-1017 (+ web plugin for 58 holdings & external stocks)
+   ├── OpenRouter System-2     deepseek/deepseek-v4.1-flash-1017 (+ web plugin for any CSV or external stock)
    └── Live Two-Way Notion     Cockpit Log (writes + async enrichment + Undo archive) & Holdings Watchlist (read + patch)
 ```
 
@@ -122,7 +122,7 @@ Active investors, buy-side analysts, and portfolio managers face acute informati
 ## 3. Final Pre-Submit Checklist (Before Nov 29, 19:59 UTC)
 
 - [ ] **GitHub visibility:** Flip `oblomovunleashed/Cockpit-G2` from `PRIVATE` to `PUBLIC`.
-- [ ] **YouTube upload:** Upload `/Users/dominic/Desktop/Cockpit - Your Control Centre (Live Demo).mp4` as **Unlisted** with chapter timestamps (`0:00`–`2:13`).
+- [ ] **YouTube upload:** Upload `/Users/dominic/Desktop/Cockpit - Your Control Centre (Live Demo).mp4` as **Unlisted** with chapter timestamps (`0:00`–`1:54`, `2:04` total).
 - [ ] **README video link:** Add the YouTube URL at the top of `README.md` (and push).
 - [ ] **DoraHacks BUIDL page:** Paste the Name, Tagline, Description, GitHub link, YouTube link, Avatar (`assets/cockpit-logo-512.png`), Cover (`docs/screenshots/01-cover-cockpit-g2.png`), and Gallery Screenshots (`docs/screenshots/02-...` through `09-...`).
 - [ ] **Optional bonus:** Create a GitHub Release (`v0.2.0`) attaching `glasses/cockpit.ehpk` (clearly labeled for desktop simulator / local loopback setup) so judges can download it in 1 click.

@@ -1,10 +1,10 @@
-![Cockpit G2 — The Control Centre for your second Brain](assets/cockpit-banner.png)
+[![Cockpit G2 — Watch the Live Demo (2:04)](assets/cockpit-banner.png)](https://www.youtube.com/watch?v=ISgrmFkWsOQ)
 
 # Cockpit G2 — The Control Centre for your second Brain
 
 One calm hold-to-speak gesture across **Work**, **Personal**, and **Interests** on **Even Realities G2** (`576 × 288` monochrome green). **OpenRouter Jev** (System 1, `~200–460 ms`) routes quick thoughts straight to **Notion** without stalling on an LLM, and wakes **DeepSeek** (System 2) only when you need sourced research or background enrichment — returning **one calm, verifiable card** at a glance.
 
-Built for **[Heads Up: Even Realities Hackathon](https://dorahacks.io/hackathon/even-realities/detail)** (Nov 23–29, 2026) — **Track 04 · AI Assistants & Work** (`OpenRouter` + `Notion`).
+**▶ [Watch the Live Demo (2:04)](https://www.youtube.com/watch?v=ISgrmFkWsOQ)** · Built for **[Heads Up: Even Realities Hackathon](https://dorahacks.io/hackathon/even-realities/detail)** (Nov 23–29, 2026) — **Track 04 · AI Assistants & Work** (`OpenRouter` + `Notion`).
 
 ### Live Captures (`Even Hub Simulator 0.9.5` + OpenRouter Jev / DeepSeek + Two-Way Notion)
 

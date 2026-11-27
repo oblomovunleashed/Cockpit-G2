@@ -11,7 +11,7 @@ Ready-to-paste fields, gallery screenshot mapping, and checklist for **Heads Up:
 - **Track:** `Track 04 · AI Assistants & Work`
 - **Ecosystem / Tech Tags:** `Even Realities G2`, `Even Hub SDK`, `OpenRouter`, `TypeSafe Jev`, `DeepSeek`, `Whisper`, `Notion`, `FastAPI`, `TypeScript`, `SQLite FTS5`
 - **GitHub Repository:** `https://github.com/oblomovunleashed/Cockpit-G2` *(flip repo from `PRIVATE` to `PUBLIC` before submitting!)*
-- **Demo Video (`2m 04s`):** Upload `/Users/dominic/Desktop/Cockpit - Your Control Centre (Live Demo).mp4` to **YouTube (Unlisted)** and paste the URL here.
+- **Demo Video (`2m 04s`):** `https://www.youtube.com/watch?v=ISgrmFkWsOQ`
 - **Avatar / Logo:** `assets/cockpit-logo-512.png`
 - **Cover Banner (`16:9`):** `docs/screenshots/01-cover-cockpit-g2.png` *(or `assets/cockpit-banner.png`)*
 
@@ -32,6 +32,8 @@ Ready-to-paste fields, gallery screenshot mapping, and checklist for **Heads Up:
 
 ```markdown
 # Cockpit G2 — The Control Centre for your second Brain
+
+**▶ [Watch the 2-Minute Live Demo on YouTube](https://www.youtube.com/watch?v=ISgrmFkWsOQ)**
 
 **One day. Too many places to put it.** Stopping to sort every thought—a quick podcast takeaway, a personal reminder for next Friday, or what actually changed in your largest holding's earnings release—interrupts whatever you are doing.
 
@@ -122,7 +124,7 @@ Active investors, buy-side analysts, and portfolio managers face acute informati
 ## 3. Final Pre-Submit Checklist (Before Nov 29, 19:59 UTC)
 
 - [ ] **GitHub visibility:** Flip `oblomovunleashed/Cockpit-G2` from `PRIVATE` to `PUBLIC`.
-- [ ] **YouTube upload:** Upload `/Users/dominic/Desktop/Cockpit - Your Control Centre (Live Demo).mp4` as **Unlisted** with chapter timestamps (`0:00`–`1:54`, `2:04` total).
-- [ ] **README video link:** Add the YouTube URL at the top of `README.md` (and push).
+- [x] **YouTube upload:** Uploaded as Unlisted at `https://www.youtube.com/watch?v=ISgrmFkWsOQ` (`2:04`).
+- [x] **README video link:** Added to the top of `README.md` and pushed.
 - [ ] **DoraHacks BUIDL page:** Paste the Name, Tagline, Description, GitHub link, YouTube link, Avatar (`assets/cockpit-logo-512.png`), Cover (`docs/screenshots/01-cover-cockpit-g2.png`), and Gallery Screenshots (`docs/screenshots/02-...` through `09-...`).
 - [ ] **Optional bonus:** Create a GitHub Release (`v0.2.0`) attaching `glasses/cockpit.ehpk` (clearly labeled for desktop simulator / local loopback setup) so judges can download it in 1 click.

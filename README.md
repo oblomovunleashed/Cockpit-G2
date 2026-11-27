@@ -67,7 +67,7 @@ backend/ (Python 3.13 · FastAPI · SQLite + FTS5 · Drop-in CSV Registry · Asy
 
 - **Tier 0 (local):** SQLite FTS5 retrieval & indexed previews render in **`< 5 ms`** (`$0`).
 - **Verification:** **51 automated tests** (`37` Python + `14` TypeScript) and **`15/15` live OpenRouter + Notion smoke checks**.
-- **Deep dives:** [Architecture & Gestures](docs/architecture.md) · [Demo Script & 5 API Requests](docs/demo-script.md) · [Live Wiring Learnings](docs/live-wiring-learnings.md) · [DoraHacks Kit](docs/dorahacks-submission.md)
+- **Deep dives:** [Architecture & Gestures](docs/architecture.md) · [Live Wiring Learnings & 5 API Requests](docs/live-wiring-learnings.md)
 
 ---
 
@@ -109,7 +109,9 @@ make sim            # Terminal 3 — Even Hub G2 Simulator (576×288 + CoreAudio
 make pack           # Builds glasses/cockpit.ehpk (min_app_version 2.2.10, SDK 0.0.16, network + g2-microphone)
 ```
 
-> **Desktop vs. phone deployment:** `make pack` targets the unauthenticated local desktop loopback (`http://127.0.0.1:8000`) for simulator evaluation. Deploying to a physical phone WebView requires pointing `glasses/src/api.ts` and `glasses/app.json` to an authenticated HTTPS backend.
+Or download the pre-built desktop simulator package (`cockpit.ehpk`) directly from **[GitHub Releases](https://github.com/oblomovunleashed/Cockpit-G2/releases/latest)**.
+
+> **Desktop vs. phone deployment:** `make pack` (and the release `.ehpk`) targets the unauthenticated local desktop loopback (`http://127.0.0.1:8000`) for simulator evaluation. Deploying to a physical phone WebView requires pointing `glasses/src/api.ts` and `glasses/app.json` to an authenticated HTTPS backend.
 
 ---
 
@@ -117,4 +119,4 @@ make pack           # Builds glasses/cockpit.ehpk (min_app_version 2.2.10, SDK 0
 
 - **Strictly read-only financial inputs:** No brokerage execution, trading, or investment advice. Confirmed writes go exclusively to your personal SQLite journal and Notion workspace.
 - **Hackathon build window:** All code, tests, brand assets, `.ehpk` packaging, and live integrations were built during **Nov 23–29, 2026** (built solo with AI-assisted coding tools).
-- **API & SDK feature requests (5):** Documented in [docs/demo-script.md](docs/demo-script.md).
+- **API & SDK feature requests (5):** Documented in [docs/live-wiring-learnings.md](docs/live-wiring-learnings.md#5-api--sdk-feature-requests-5--collected-during-build-week).

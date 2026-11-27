@@ -52,3 +52,15 @@ Cockpit loads the full **61-position portfolio (`100.00%` weight)** from a plain
    - Booting and resting on `COCKPIT | READY` (`activeHolding === null`) prevents the top holding from bleeding into Personal/Interests captures, while splitting Jev's `holding` choices into indexed tickers + `untracked` + `implicit_active` + `none` lets any portfolio or external company route cleanly to web-grounded preview/review.
 4. **Fast capture on glasses + Jev-gated async post-confirm enrichment:**
    - Adding a `needs_enrichment` `noul` question to the same Jev round-trip (`~220 ms`) lets simple reminders (`enrich_p=0.09`) skip LLMs completely, while media/relative-date logs (`enrich_p=0.88–0.91`) confirm immediately on glasses and enrich asynchronously—constraining published links strictly to OpenRouter provider `url_citation` annotations and honestly marking `Needs Detail` if a show/title was never named.
+
+---
+
+## 5. API & SDK Feature Requests (5 — Collected During Build Week)
+
+Concrete developer friction encountered while building live with Even Hub SDK (`0.0.16`), Even Hub Simulator (`0.9.5`), OpenRouter/Jev, and Notion:
+
+1. **[Even Hub SDK]** Normalize protobuf zero-value `CLICK_EVENT` (`0`) inside the SDK before invoking `onEvenHubEvent` listeners instead of emitting `eventType: undefined` on single taps.
+2. **[Even Hub SDK / Simulator]** Document the exact supported LVGL firmware glyph set (and optionally warn at compile/pack time when characters like `✓` `U+2713` are missing), plus add a `--audio-file sample.wav` simulator flag so `audioEvent.audioPcm` can be replayed deterministically in automated tests and demo recordings.
+3. **[OpenRouter Decisions API / Jev]** Document prominently in quickstart examples that `noul` responses return `"probability"` (not `"noul"`) and that every question in `questions` evaluates independently against `state` (so shared retrieval passages must live inside `state`, not sibling `criteria`).
+4. **[OpenRouter STT]** Support streaming chunked PCM/WebSocket transcription alongside base64 WAV on `/api/v1/audio/transcriptions` to shave ~1 s off push-to-talk smart-glasses latency.
+5. **[Notion API]** Support a first-party local-dev / SSE change stream (or CLI tunnel) for property-change webhooks with near-immediate delivery on rapid consecutive edits, so local-first / loopback companion apps can react to live Notion `Saved Question` changes without hosting a public HTTPS relay or waiting on webhook aggregation windows.

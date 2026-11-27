@@ -29,6 +29,7 @@ Cockpit G2 boots into a calm `COCKPIT | READY` screen and splits every voice com
 | *"Can we review Natera earnings?"* | **Tier 1 + Tier 2** · `Work · Brief` (`~200 ms`) | **Yes** | Pulls your latest Notion `Saved Question`, checks indexed Q3 filings via FTS5 + Jev, renders **1 sourced card** (`HELD` / `AHEAD` / `WATCH`) |
 | *"What drove Signatera ASP and cash flow?"* | **Tier 1 + Tier 2** · `Work · Follow-Up` (`~205 ms`) | **Yes** | Retrieves the exact call passage (`~$1,290 ASP; cash $1.10B, FCF-positive`); **Tap 1** previews exact check wording, **Tap 2** writes to Notion |
 | *"Can you please preview Insmed earnings?"* | **Tier 1 + Tier 2 Web** · `Work · Preview` (`~200 ms`) | **Yes** *(web)* | **Zero hardcoded tickers:** routes directly to live web search, resolves `INSM`, and tags weight (`4.2%`) from a drop-in CSV — any public stock works |
+| *"How did Borussia Dortmund play last game?"* | **Tier 1 + Tier 2 Web** · `Any Mind · Answer` (`~210 ms`) | **Yes** *(web)* | General live, sports, recipe, or how-to questions wake DeepSeek Web for a 1-card sourced answer (with optional 1-tap `Save Note` to Notion) |
 
 > **Example Work Domain:** The **Work** mind ships configured as a strictly read-only equity research workflow to prove real-world density — including a **sample CSV watchlist** ([backend/app/data/portfolio.csv](backend/app/data/portfolio.csv)) and three indexed Oct–Nov 2026 primary releases ([Natera Q3](https://investor.natera.com/news-releases/news-release-details/natera-reports-third-quarter-2026-financial-results), [Seagate Q1 FY27](https://investors.seagate.com/news/news-details/2026/Seagate-Technology-Reports-Fiscal-First-Quarter-2027-Financial-Results/default.aspx), [Amazon Q3](https://ir.aboutamazon.com/news-release/news-release-details/2026/Amazon-com-Announces-Third-Quarter-Results/default.aspx)). Swap in your own CSV or edit your Notion watchlist to adapt it with zero code changes.
 
@@ -66,7 +67,7 @@ backend/ (Python 3.13 · FastAPI · SQLite + FTS5 · Drop-in CSV Registry · Asy
 ```
 
 - **Tier 0 (local):** SQLite FTS5 retrieval & indexed previews render in **`< 5 ms`** (`$0`).
-- **Verification:** **51 automated tests** (`37` Python + `14` TypeScript) and **`15/15` live OpenRouter + Notion smoke checks**.
+- **Verification:** **54 automated tests** (`40` Python + `14` TypeScript) and **`15/15` live OpenRouter + Notion smoke checks**.
 - **Deep dives:** [Architecture & Gestures](docs/architecture.md) · [Live Wiring Learnings & 5 API Requests](docs/live-wiring-learnings.md)
 
 ---
@@ -91,7 +92,7 @@ cp .env.example .env
 ### Test, Build & Run
 
 ```bash
-make test           # 37 Python pytest tests + 14 TypeScript Node tests
+make test           # 40 Python pytest tests + 14 TypeScript Node tests
 make build          # tsc --noEmit && vite build
 ```
 

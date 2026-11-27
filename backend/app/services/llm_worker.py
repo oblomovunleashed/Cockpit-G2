@@ -334,6 +334,64 @@ class LLMWorker:
         )
         return resolved_ticker, finding[:190], source_label[:45], draft
 
+    async def answer_general_question(
+        self,
+        *,
+        question: str,
+        mind: Mind,
+        today_date: date | None = None,
+    ) -> tuple[str, str, str, str]:
+        """
+        Web-grounded single-glance answer for any general factual, live, sports, recipe,
+        or research question across Work, Personal, and Interests.
+        Returns (concise_answer, source_label, saveable_note, verified_url).
+        """
+        today = today_date or datetime.now(timezone.utc).date()
+        clean_q = " ".join(question.strip().split())
+
+        if not self.settings.live_openrouter_enabled:
+            answer = (
+                f"Live web search is off (mock mode) for '{clean_q[:70]}'. "
+                f"Enable live OpenRouter to fetch current {today.year} answers."
+            )
+            return answer[:190], "Offline mock", f"{clean_q[:90]} — enable live web to answer.", ""
+
+        system_prompt = (
+            f"Today is {today.isoformat()} ({today.strftime('%A')}). "
+            "You answer spoken questions for Even Realities G2 monochrome smart glasses (576x288). "
+            "Give a direct, concrete, date-aware answer packed with the exact facts the wearer wants "
+            "(scores, opponents, dates, key ingredients/steps, numbers, or concise takeaways). "
+            "Plain text ONLY: no emojis, no markdown, no [text](url) links inside text fields. "
+            "If live web results do not confirm a fact, say so honestly instead of guessing. "
+            "Return strict JSON with keys: "
+            "'answer' (<= 175 chars, ultra-crisp direct answer for the glasses lens), "
+            "'source_label' (<= 40 chars, e.g. 'ESPN · Nov 2026' or 'Serious Eats'), "
+            "'saveable_note' (<= 140 chars, compact self-contained takeaway if the user taps to save to Notion), "
+            "'url' (canonical https URL from web search or empty string)."
+        )
+        user_prompt = (
+            f"Mind: {mind.value}\n"
+            f"Wearer question: {clean_q}"
+        )
+
+        parsed, citation_urls = await self._call_json_llm(
+            system_prompt,
+            user_prompt,
+            use_web=True,
+            max_web_results=3,
+        )
+        if not parsed:
+            fallback = f"Could not retrieve a live web answer for '{clean_q[:70]}' right now."
+            return fallback[:190], "Web lookup unavailable", clean_q[:140], ""
+
+        answer = strip_markdown(str(parsed.get("answer", ""))) or (
+            f"No verified web answer found for '{clean_q[:70]}'."
+        )
+        source_label = strip_markdown(str(parsed.get("source_label", ""))) or "Live Web"
+        saveable_note = strip_markdown(str(parsed.get("saveable_note", ""))) or answer
+        verified_url = _pick_provider_cited_url(str(parsed.get("url", "") or ""), citation_urls)
+        return answer[:190], source_label[:45], saveable_note[:160], verified_url[:500]
+
     async def enrich_journal_entry(
         self,
         entry: JournalEntry,
@@ -370,9 +428,10 @@ class LLMWorker:
             "You are a background enrichment worker for a personal voice journal called Cockpit. "
             "Your job is to enrich a confirmed voice note/task with factual, date-aware context "
             "(for example: resolving the actual latest episode & guest of a named podcast as of today, "
-            "identifying the author/topic of a named book/article, or resolving a relative calendar date). "
-            "CRITICAL HONESTY RULE: If the user did NOT name the specific show, book, article, or entity "
-            "(for example: 'I enjoy the latest, and that's the best podcast' without naming WHICH podcast), "
+            "identifying the author/topic of a named book/article, providing a concise practical summary/key steps "
+            "and top reference for a research/how-to/recipe task, or resolving a relative calendar date). "
+            "CRITICAL HONESTY RULE: If the user asked about a 'latest' podcast/book/article without naming WHICH "
+            "show or title (for example: 'I enjoy the latest, and that's the best podcast'), "
             "DO NOT guess or invent a show or episode! Set 'resolved': false and 'needs_detail': true, "
             "and set 'enriched_summary' to a short polite prompt saying what detail is missing. "
             "Plain text ONLY: no markdown links [a](b), no emojis. Return strict JSON with keys: "

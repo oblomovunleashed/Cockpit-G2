@@ -76,6 +76,8 @@ export class CockpitApiClient {
         ticker: draft.ticker,
         content: draft.content,
         source_citation: draft.source_citation,
+        mind: draft.mind ?? 'work',
+        kind: draft.kind ?? 'check',
       }),
     });
     if (!res.ok) throw new Error(await readErrorDetail(res, 'POST /api/stage-check failed'));

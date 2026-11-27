@@ -14,6 +14,7 @@ class Mind(str, Enum):
 class ActionType(str, Enum):
     LOG_NOTE = "log_note"
     LOG_TASK = "log_task"
+    ANSWER_QUESTION = "answer_question"
     EARNINGS_PREVIEW = "earnings_preview"
     BRIEF_HOLDING = "brief_holding"
     FOLLOW_UP_SOURCE = "follow_up_source"
@@ -114,17 +115,21 @@ class UpdatePendingWriteRequest(BaseModel):
 
 
 class DraftCheck(BaseModel):
-    """Proposed next-quarter check surfaced for explicit review before confirmation."""
+    """Proposed note or next-quarter check surfaced for explicit review before confirmation."""
 
     content: str
-    ticker: str
+    ticker: str = ""
     source_citation: str | None = None
+    mind: Mind = Mind.WORK
+    kind: Literal["note", "task", "check"] = "check"
 
 
 class StageCheckRequest(BaseModel):
-    ticker: str
+    ticker: str = ""
     content: str = Field(..., min_length=1, max_length=1000)
     source_citation: str | None = None
+    mind: Mind = Mind.WORK
+    kind: Literal["note", "task", "check"] = "check"
 
 
 class UtteranceRequest(BaseModel):

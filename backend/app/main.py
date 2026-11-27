@@ -362,6 +362,36 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             )
 
         # --------------------------------------------------------------
+        # GENERAL LIVE QUESTION / RESEARCH (WORK, PERSONAL, INTERESTS)
+        # --------------------------------------------------------------
+        if decision.action == ActionType.ANSWER_QUESTION:
+            answer, source_label, saveable_note, _verified_url = await worker.answer_general_question(
+                question=transcript,
+                mind=decision.mind,
+            )
+            mind_label = decision.mind.value.upper()
+            hud = HudCard(
+                header=_clip(f"{mind_label} · ANSWER · WEB", 60),
+                body=_clip(f"{answer}\n[Web: {source_label}]", 240),
+                footer="Tap: save note · Hold: ask · 2x: home",
+            )
+            draft = DraftCheck(
+                content=saveable_note,
+                ticker="",
+                source_citation=f"Web: {source_label}",
+                mind=decision.mind,
+                kind="note",
+            )
+            return UtteranceResponse(
+                transcript=transcript,
+                decision=decision,
+                hud=hud,
+                holding=None,
+                pending_write=None,
+                suggested_check=draft,
+            )
+
+        # --------------------------------------------------------------
         # WORK SKILL 1: EARNINGS PREVIEW (HELD OR NOT HELD!)
         # - Held watchlist ticker -> Tier 0 deterministic (ZERO LLM)
         # - Any non-watchlist company -> Live web-grounded preview
@@ -754,19 +784,25 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.post("/api/stage-check")
     async def stage_explicit_check(body: StageCheckRequest) -> dict[str, object]:
         """
-        Stages an explicit proposed check (for either a tracked holding or an ad-hoc
-        non-watchlist company like GOOGL) and returns the CONFIRM card showing exact wording.
+        Stages an explicit proposed check or note (for a tracked holding, an ad-hoc company
+        like GOOGL, or a general Personal/Interests web answer) and returns the CONFIRM card
+        showing exact wording.
         """
-        clean_ticker = body.ticker.strip().upper()[:12]
-        holding = db.get_holding(clean_ticker)
+        clean_ticker = body.ticker.strip().upper()[:12] or None
+        holding = db.get_holding(clean_ticker) if clean_ticker else None
+        updates_next_check = (
+            body.mind == Mind.WORK
+            and body.kind == "check"
+            and holding is not None
+        )
         pending = PendingWrite(
             id=uuid.uuid4().hex[:12],
-            mind=Mind.WORK,
-            kind="check",
+            mind=body.mind,
+            kind=body.kind,
             content=body.content.strip(),
-            ticker=holding.ticker if holding else clean_ticker,
+            ticker=(holding.ticker if holding else clean_ticker) if body.mind == Mind.WORK else None,
             source_citation=body.source_citation or (holding.source_citation if holding else None),
-            updates_next_check=holding is not None,
+            updates_next_check=updates_next_check,
             needs_enrichment=False,
         )
         db.save_pending_write(pending)

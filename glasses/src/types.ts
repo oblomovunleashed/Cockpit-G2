@@ -3,6 +3,7 @@ export type Mind = 'work' | 'personal' | 'interests';
 export type ActionType =
   | 'log_note'
   | 'log_task'
+  | 'answer_question'
   | 'earnings_preview'
   | 'brief_holding'
   | 'follow_up_source'
@@ -76,6 +77,8 @@ export interface DraftCheck {
   content: string;
   ticker: string;
   source_citation: string | null;
+  mind?: Mind;
+  kind?: 'note' | 'task' | 'check';
 }
 
 export interface UtteranceResponse {

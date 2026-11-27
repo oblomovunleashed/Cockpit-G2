@@ -22,6 +22,11 @@ _ENRICH_MEDIA_RE = re.compile(
     re.IGNORECASE,
 )
 
+_ENRICH_RESEARCH_RE = re.compile(
+    r"\b(research|look\s+up|find\s+out|recipe|how\s+to\s+(?:make|cook|build|fix))\b",
+    re.IGNORECASE,
+)
+
 # Strictly for offline mock mode (live Jev understands products & companies natively)
 _MOCK_PRODUCT_HINTS: dict[str, str] = {
     "signatera": "NTRA",
@@ -71,9 +76,9 @@ def heuristic_needs_enrichment(transcript: str, mind: Mind) -> bool:
     """Deterministic fallback trigger for post-confirm background enrichment."""
     lower = transcript.lower().strip()
     if mind == Mind.PERSONAL:
-        return bool(_RELATIVE_DATE_RE.search(lower))
+        return bool(_RELATIVE_DATE_RE.search(lower) or _ENRICH_RESEARCH_RE.search(lower))
     if mind == Mind.INTERESTS:
-        return bool(_ENRICH_MEDIA_RE.search(lower))
+        return bool(_ENRICH_MEDIA_RE.search(lower) or _ENRICH_RESEARCH_RE.search(lower))
     return False
 
 
@@ -159,8 +164,13 @@ class JevRouter:
                     "type": "choice",
                     "instructions": "Which Cockpit skill or action should handle this utterance?",
                     "criteria": {
-                        "log_note": "Save a short personal or interests reflection, podcast/book reaction, or general thought without blocking on an LLM.",
-                        "log_task": "Save a short personal reminder, errand, gift, or to-do task without blocking on an LLM.",
+                        "log_note": "Save a short personal or interests statement, podcast/book reaction, or reflection to the journal (NOT a direct question expecting an answer on screen).",
+                        "log_task": "Save a short personal reminder, errand, gift, or to-do action item to do later without blocking on an LLM (e.g. 'remember to...', 'buy...', 'book...').",
+                        "answer_question": (
+                            "Ask a direct factual, live, how-to, or general research question expecting an immediate "
+                            "answer on screen (sports scores, recipes, how to make/do something, travel, weather, news, "
+                            "people, or general knowledge — NOT company earnings/filing follow-ups, which use follow_up_source)."
+                        ),
                         "earnings_preview": "Pre-earnings setup, preview, or checklist BEFORE a print for ANY company (held or not held).",
                         "brief_holding": "Post-earnings thesis review or earnings summary for ANY company (held or not held).",
                         "follow_up_source": "Ask a specific factual follow-up question about one company's metric, driver, margin, or management comment.",
@@ -192,17 +202,20 @@ class JevRouter:
                 "needs_llm_worker": {
                     "type": "noul",
                     "instructions": (
-                        "Does this request need the System-2 LLM worker on screen right now (true for thesis review, "
-                        "source follow-up, peer read-across, or preview/review of a non-indexed company; false for "
-                        "fast logs, dictated checks, and indexed-holding pre-earnings previews)?"
+                        "Does this request need the System-2 LLM worker on screen right now (true for direct "
+                        "general/how-to/live questions [answer_question], thesis review, source follow-up, "
+                        "peer read-across, or preview/review of a non-indexed company; false for fast logs, "
+                        "dictated checks, and indexed-holding pre-earnings previews)?"
                     ),
                 },
                 "needs_enrichment": {
                     "type": "noul",
                     "instructions": (
-                        "If this is a note or task being logged, does it reference a podcast, episode, book, "
-                        "article, film, or relative date ('latest', 'next Friday', 'tomorrow') that a background "
-                        "worker should resolve after saving? False for plain standalone reminders like 'buy milk'."
+                        "If this is a note or task being logged, would a background web or calendar lookup "
+                        "meaningfully enrich it after saving? True for named podcasts, books, articles, films, "
+                        "relative dates ('next Friday', 'tomorrow'), or explicit research/lookup/recipe tasks "
+                        "('research how to make...', 'look up...', 'find a recipe for...'). False for plain "
+                        "standalone reminders like 'buy milk' or 'get flights for Shanghai'."
                     ),
                 },
             },
@@ -255,6 +268,10 @@ class JevRouter:
                 elif raw_holding.lower() in ("implicit_active", "none") and active_ticker:
                     holding = active_ticker.upper()
 
+        # Keep indexed company filing questions on FOLLOW_UP_SOURCE so FTS5 + honest abstention always apply
+        if mind == Mind.WORK and holding in tracked_set and action == ActionType.ANSWER_QUESTION:
+            action = ActionType.FOLLOW_UP_SOURCE
+
         is_adhoc_company = mind == Mind.WORK and holding is None and requested_company is not None
         no_llm_actions = (
             ActionType.LOG_NOTE,
@@ -262,6 +279,7 @@ class JevRouter:
             ActionType.DRAFT_NEXT_CHECK,
         )
         llm_actions = (
+            ActionType.ANSWER_QUESTION,
             ActionType.BRIEF_HOLDING,
             ActionType.FOLLOW_UP_SOURCE,
         )
@@ -571,7 +589,13 @@ class JevRouter:
     ) -> JevDecision:
         lower = transcript.lower().strip()
 
-        if any(kw in lower for kw in ("remember to", "remind me", "buy ", "birthday", "present", "groceries", "call mom")):
+        if any(
+            kw in lower
+            for kw in (
+                "remember to", "remember that", "remind me", "i need to", "book ",
+                "buy ", "birthday", "present", "groceries", "call mom",
+            )
+        ):
             return JevDecision(
                 mind=Mind.PERSONAL,
                 action=ActionType.LOG_TASK,
@@ -656,11 +680,14 @@ class JevRouter:
                 reasoning="Work next-quarter check staged for 1-tap journal confirmation.",
             )
 
-        if any(
-            kw in lower
-            for kw in (
-                "what drove", "asp", "cash flow", "moldx", "reimbursement",
-                "why did", "what did management", "how did", "follow up",
+        if (
+            (resolved_ticker is not None or untracked_company is not None)
+            and any(
+                kw in lower
+                for kw in (
+                    "what drove", "asp", "cash flow", "moldx", "reimbursement",
+                    "why did", "what did management", "how did", "follow up",
+                )
             )
         ):
             return JevDecision(
@@ -692,6 +719,27 @@ class JevRouter:
                     if untracked_company
                     else "Work earnings review routes to LLM worker."
                 ),
+            )
+
+        if (
+            lower.endswith("?")
+            or any(
+                lower.startswith(prefix)
+                for prefix in (
+                    "how did ", "how do ", "how to ", "who won ", "who is ",
+                    "what is ", "what's ", "when is ", "where is ", "why did ",
+                    "tell me about ", "research how to ", "research ",
+                )
+            )
+        ):
+            return JevDecision(
+                mind=Mind.INTERESTS,
+                action=ActionType.ANSWER_QUESTION,
+                holding=None,
+                needs_llm_worker=True,
+                confidence=0.92,
+                mode="mock",
+                reasoning="General question routes directly to System-2 web worker.",
             )
 
         return JevDecision(

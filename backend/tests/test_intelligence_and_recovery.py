@@ -669,3 +669,154 @@ def test_router_target_specificity_and_unsupported_peer_clarification(tmp_path: 
     for chunk in SEED_CHUNKS:
         url = chunk["source_url"]
         assert "news-release" in url or "news-details" in url, f"Expected dated release URL, got {url}"
+
+
+def test_answer_question_routes_general_questions_and_supports_optional_note_save(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """General live questions (sports, recipes, facts) wake System-2 web worker instead of staging a bare task."""
+    live_settings = Settings(
+        cockpit_mock_mode=False,
+        cockpit_db_path=str(tmp_path / "answer_q.db"),
+        openrouter_api_key="sk-or-test",
+    )
+    app = create_app(live_settings)
+    runtime = app.state.runtime
+
+    async def fake_jev_call(_payload: dict):
+        return (
+            {
+                "model": "typesafe/jev-1.14",
+                "answers": {
+                    "mind": {"type": "choice", "choice": "interests", "confidence": 0.96},
+                    "action": {"type": "choice", "choice": "answer_question", "confidence": 0.97},
+                    "holding": {"type": "choice", "choice": "none", "confidence": 0.99},
+                    "peer_holding": {"type": "choice", "choice": "none", "confidence": 0.99},
+                    "needs_llm_worker": {"type": "noul", "probability": 0.96},
+                    "needs_enrichment": {"type": "noul", "probability": 0.05},
+                },
+            },
+            195,
+        )
+
+    async def fake_web_answer(*_args, **_kwargs):
+        return (
+            {
+                "answer": "Borussia Dortmund won 3-1 vs Freiburg on Nov 22 (Beier, Nmecha, Brandt).",
+                "source_label": "Bundesliga · Nov 2026",
+                "saveable_note": "BVB beat Freiburg 3-1 on Nov 22, 2026.",
+                "url": "https://www.bundesliga.com/en/bundesliga/matchday",
+            },
+            ["https://www.bundesliga.com/en/bundesliga/matchday"],
+        )
+
+    monkeypatch.setattr(runtime.jev, "_call_jev", fake_jev_call)
+    monkeypatch.setattr(runtime.worker, "_call_json_llm", fake_web_answer)
+
+    with TestClient(app) as client:
+        res = client.post(
+            "/api/text",
+            json={"transcript": "How did Borussia Dortmund play in its last game?"},
+        )
+        assert res.status_code == 200
+        body = res.json()
+        assert body["decision"]["action"] == "answer_question"
+        assert body["decision"]["needs_llm_worker"] is True
+        assert body["pending_write"] is None
+        assert body["hud"]["header"] == "INTERESTS · ANSWER · WEB"
+        assert "3-1" in body["hud"]["body"]
+
+        # Optional Tap 1 -> stages as an INTERESTS NOTE (not a Work check!)
+        draft = body["suggested_check"]
+        assert draft["mind"] == "interests"
+        assert draft["kind"] == "note"
+        assert draft["ticker"] == ""
+        staged = client.post("/api/stage-check", json=draft)
+        assert staged.status_code == 200
+        pending = staged.json()["pending_write"]
+        assert pending["mind"] == "interests"
+        assert pending["kind"] == "note"
+        assert pending["ticker"] is None
+        assert pending["updates_next_check"] is False
+        assert "INTERESTS · CONFIRM NOTE" in staged.json()["hud"]["header"]
+
+        # Optional Tap 2 -> commits cleanly to journal
+        saved = client.post("/api/confirm", json={"pending_id": pending["id"]})
+        assert saved.status_code == 200
+        assert saved.json()["entry"]["mind"] == "interests"
+        assert saved.json()["entry"]["kind"] == "note"
+        assert saved.json()["holding"] is None
+
+
+@pytest.mark.asyncio
+async def test_indexed_holding_answer_question_guard_preserves_abstention(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Even if live Jev picks answer_question for an indexed ticker, it stays on FOLLOW_UP_SOURCE."""
+    router = JevRouter(Settings(cockpit_mock_mode=False, openrouter_api_key="sk-or-test"))
+
+    async def fake_jev_call(_payload: dict):
+        return (
+            {
+                "model": "typesafe/jev-1.14",
+                "answers": {
+                    "mind": {"type": "choice", "choice": "work", "confidence": 0.98},
+                    "action": {"type": "choice", "choice": "answer_question", "confidence": 0.85},
+                    "holding": {"type": "choice", "choice": "NTRA", "confidence": 0.98},
+                    "peer_holding": {"type": "choice", "choice": "none", "confidence": 0.99},
+                    "needs_llm_worker": {"type": "noul", "probability": 0.95},
+                    "needs_enrichment": {"type": "noul", "probability": 0.01},
+                },
+            },
+            180,
+        )
+
+    monkeypatch.setattr(router, "_call_jev", fake_jev_call)
+    decision = await router.route_utterance(
+        "What did management say about Natera warranty reserves?",
+        available_tickers=["NTRA", "STX", "AMZN"],
+        available_holdings={"NTRA": "Natera, Inc."},
+    )
+    assert decision.mind == Mind.WORK
+    assert decision.holding == "NTRA"
+    assert decision.action == ActionType.FOLLOW_UP_SOURCE
+    assert decision.needs_llm_worker is True
+
+
+def test_mock_general_question_and_research_enrichment(tmp_path: Path) -> None:
+    """Mock mode routes general questions to ANSWER_QUESTION and flags research tasks for enrichment."""
+    from app.services.jev_router import heuristic_needs_enrichment
+
+    assert heuristic_needs_enrichment("research how to make banh mi hui.", Mind.PERSONAL) is True
+    assert heuristic_needs_enrichment("look up best ramen in Tokyo", Mind.INTERESTS) is True
+    assert heuristic_needs_enrichment("Remember that I need to get the flights for Shanghai.", Mind.PERSONAL) is False
+
+    app = create_app(
+        Settings(
+            cockpit_mock_mode=True,
+            cockpit_db_path=str(tmp_path / "mock_q.db"),
+            openrouter_api_key="",
+            notion_token="",
+        )
+    )
+    with TestClient(app) as client:
+        r_bvb = client.post("/api/text", json={"transcript": "How did Borussia Dortmund play in its last game?"})
+        assert r_bvb.status_code == 200
+        assert r_bvb.json()["decision"]["action"] == "answer_question"
+        assert r_bvb.json()["decision"]["needs_llm_worker"] is True
+        assert r_bvb.json()["hud"]["header"] == "INTERESTS · ANSWER · WEB"
+
+        r_banhmi = client.post("/api/text", json={"transcript": "research how to make banh mi hui."})
+        assert r_banhmi.status_code == 200
+        assert r_banhmi.json()["decision"]["action"] == "answer_question"
+        assert r_banhmi.json()["decision"]["needs_llm_worker"] is True
+
+        r_flights = client.post(
+            "/api/text",
+            json={"transcript": "Remember that I need to get the flights for Shanghai."},
+        )
+        assert r_flights.status_code == 200
+        assert r_flights.json()["decision"]["action"] == "log_task"
+        assert r_flights.json()["decision"]["needs_llm_worker"] is False
+        assert r_flights.json()["decision"]["needs_enrichment"] is False
